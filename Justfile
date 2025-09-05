@@ -77,6 +77,29 @@ build expr *west_args: _parse_combos
         just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }}
     done
 
+# build firmware for matching targets (parallel with xargs)
+mbuild expr *west_args: _parse_combos
+    #!/usr/bin/env bash
+    set -euo pipefail
+    targets=$(just _parse_targets {{ expr }})
+
+    [[ -z $targets ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
+
+    # Concurrency: default to CPU count; override with env var JOBS
+    jobs=${JOBS:-}
+    if [[ -z "${jobs}" ]]; then
+        if command -v nproc >/dev/null 2>&1; then
+            jobs=$(nproc)
+        elif command -v sysctl >/dev/null 2>&1; then
+            jobs=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        else
+            jobs=4
+        fi
+    fi
+    echo "Running builds in parallel: ${jobs} job(s)"
+
+    printf '%s\n' "$targets" | sed '/^$/d' | xargs -P "$jobs" -I{} just _build_from_csv "{}" {{ west_args }}
+
 # clear build cache and artifacts
 clean:
     rm -rf {{ build }} {{ out }}
