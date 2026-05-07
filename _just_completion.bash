@@ -1,10 +1,29 @@
 #!/bin/bash
 
 _just_completion() {
-    local cur prev
+    local cur prev invoked
+    local -a just_cmd
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
+    invoked="${COMP_WORDS[0]}"
+
+    if [[ "$(basename "$invoked")" == "just.sh" ]]; then
+        just_cmd=("$invoked")
+    elif command -v just >/dev/null 2>&1; then
+        just_cmd=("just")
+    elif [[ -x "./just.sh" ]]; then
+        just_cmd=("./just.sh")
+    else
+        return 0
+    fi
+
+    if [[ $COMP_CWORD -eq 1 ]]; then
+        local recipes
+        recipes=$("${just_cmd[@]}" --summary 2>/dev/null)
+        COMPREPLY=($(compgen -W "$recipes" -- "$cur"))
+        return 0
+    fi
 
     if [[ "${COMP_WORDS[1]}" == "init" ]]; then
         # Handle init command completion with config directories
@@ -15,12 +34,16 @@ _just_completion() {
 
             if [[ -n "$candidates" ]]; then
                 local selected
-                selected=$(echo "$candidates" | fzf \
-                    --prompt="Select ZMK config: " \
-                    --header="Choose a configuration to initialize" \
-                    --preview="ls -1a config/{}" \
-                    --query="$cur")
-                [[ -n "$selected" ]] && COMPREPLY=("$selected")
+                if command -v fzf >/dev/null 2>&1; then
+                    selected=$(echo "$candidates" | fzf \
+                        --prompt="Select ZMK config: " \
+                        --header="Choose a configuration to initialize" \
+                        --preview="ls -1a {}" \
+                        --query="$cur")
+                    [[ -n "$selected" ]] && COMPREPLY=("$selected")
+                else
+                    COMPREPLY=($(compgen -W "$candidates" -- "$cur"))
+                fi
                 return
             fi
         fi
@@ -64,11 +87,15 @@ _just_completion() {
 
             if [[ -n "$options" ]]; then
                 local selected
-                selected=$(echo "$options" | fzf \
-                    --prompt="Select option: " \
-                    --header="Choose a west build option" \
-                    --query="$cur")
-                [[ -n "$selected" ]] && COMPREPLY=("$selected")
+                if command -v fzf >/dev/null 2>&1; then
+                    selected=$(echo "$options" | fzf \
+                        --prompt="Select option: " \
+                        --header="Choose a west build option" \
+                        --query="$cur")
+                    [[ -n "$selected" ]] && COMPREPLY=("$selected")
+                else
+                    COMPREPLY=($(compgen -W "$options" -- "$cur"))
+                fi
                 return
             fi
         fi
@@ -76,35 +103,47 @@ _just_completion() {
         # Target completion for non-options (only if target not already specified)
         if [[ "$cur" != -* && "$prev" != "-S" && "$target_specified" == false ]]; then
             local targets
-            targets=$(just _parse_targets all 2>/dev/null | sed 's/,*$//')
+            targets=$("${just_cmd[@]}" _parse_targets all 2>/dev/null | sed 's/,*$//')
 
             if [[ -n "$targets" ]]; then
-                local selected
-                selected=$(echo "$targets" | fzf \
-                    --prompt="Select build target: " \
-                    --header="Choose target to build (ESC to cancel)" \
-                    --query="$cur" \
-                    --preview="echo {} | awk -F',' '{print \"Board: \" \$1 \"\\nShield: \" \$2 \"\\nSnippet: \" \$3}'")
+                local selected board shield search_expr target_candidates
+                if command -v fzf >/dev/null 2>&1; then
+                    selected=$(echo "$targets" | fzf \
+                        --prompt="Select build target: " \
+                        --header="Choose target to build (ESC to cancel)" \
+                        --query="$cur" \
+                        --preview="echo {} | awk -F',' '{print \"Board: \" \$1 \"\\nShield: \" \$2 \"\\nSnippet: \" \$3}'")
 
-                if [[ -n "$selected" ]]; then
-                    local board shield search_expr
-                    IFS=',' read -r board shield _ <<< "$selected"
+                    if [[ -n "$selected" ]]; then
+                        IFS=',' read -r board shield _ <<< "$selected"
 
-                    if [[ -n "$shield" && "$shield" != "null" ]]; then
-                        if [[ "$shield" =~ [[:space:]] ]]; then
-                            search_expr="${shield%% *}"
+                        if [[ -n "$shield" && "$shield" != "null" ]]; then
+                            if [[ "$shield" =~ [[:space:]] ]]; then
+                                search_expr="${shield%% *}"
+                            else
+                                search_expr="$shield"
+                            fi
                         else
-                            search_expr="$shield"
+                            search_expr="$board"
                         fi
-                    else
-                        search_expr="$board"
-                    fi
 
-                    COMPREPLY=("$search_expr")
+                        COMPREPLY=("$search_expr")
+                    fi
+                else
+                    target_candidates=$(echo "$targets" | while IFS=',' read -r board shield _; do
+                        if [[ -n "$shield" && "$shield" != "null" ]]; then
+                            printf '%s\n' "${shield%% *}"
+                        else
+                            printf '%s\n' "$board"
+                        fi
+                    done | sort -u)
+                    COMPREPLY=($(compgen -W "$target_candidates" -- "$cur"))
                 fi
             fi
         fi
     fi
 }
 
-complete -F _just_completion just
+complete -o bashdefault -o default -F _just_completion just
+complete -o bashdefault -o default -F _just_completion just.sh
+complete -o bashdefault -o default -F _just_completion ./just.sh

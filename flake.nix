@@ -51,7 +51,7 @@
 
           shellHook = ''
             export ZMK_BUILD_DIR=$(pwd)/.build;
-            export ZMK_SRC_DIR=$(pwd)/zmk/app;
+            export ZMK_SRC_DIR=$(pwd)/.west-workspace/zmk/app;
 
             source _just_completion.bash
           '';

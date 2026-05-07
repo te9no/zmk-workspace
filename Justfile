@@ -2,21 +2,59 @@ default:
     @just --list --unsorted
 
 build := absolute_path('.build')
-out := absolute_path('firmware')
+west_workspace := absolute_path('.west-workspace')
 zmk_config_root := absolute_path(`
-  if [ -f .west/config ]; then
-    path=$(awk -F ' *= *' '/^ *path/ {print $2}' .west/config)
-    file=$(awk -F ' *= *' '/^ *file/ {print $2}' .west/config)
-    west_yml_path="${path:-.}/${file}"
-    echo "$(dirname $west_yml_path)/.."
+  if [ -f .west-workspace/.west/config ]; then
+    west_top=".west-workspace"
+    west_config="$west_top/.west/config"
+  elif [ -f .west/config ]; then
+    west_top="."
+    west_config=".west/config"
   else
     echo "."
+    exit 0
+  fi
+
+  if [ -n "${west_config:-}" ]; then
+    path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+    file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+    west_yml_path="$west_top/${path:-.}/${file}"
+    echo "$(dirname $west_yml_path)/.."
   fi
 `)
+zmk_config_name := `
+  if [ -f .west-workspace/.west/config ]; then
+    west_top=".west-workspace"
+    west_config="$west_top/.west/config"
+  elif [ -f .west/config ]; then
+    west_top="."
+    west_config=".west/config"
+  else
+    echo "default"
+    exit 0
+  fi
+
+  path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+  file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+  west_yml_path="$west_top/${path:-.}/${file}"
+  basename "$(realpath -m "$(dirname "$west_yml_path")/..")"
+`
+out := absolute_path('firmware') / zmk_config_name
+
+# run a just recipe in the build container
+_container *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    exec "{{ justfile_directory() }}/just.sh" {{ args }}
 
 # parse build.yaml and filter targets by expression
 _parse_targets $expr:
     #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container _parse_targets "{{ expr }}"
+    fi
+
     attrs="[.board, .shield, .snippet, .\"artifact-name\"]"
     filter="(($attrs | map(. // [.]) | combinations), ((.include // {})[] | $attrs)) | join(\",\")"
     echo "$(yq -r "$filter" "{{ zmk_config_root }}/build.yaml" | grep -v "^," | grep -i "${expr/#all/.*}")"
@@ -30,16 +68,23 @@ _build_single $board $shield $snippet $artifact *west_args:
     # Board ids may contain '/' (e.g. xiao_ble//zmk). Slashes break cp paths and mkdir.
     artifact_fs="${artifact//\//-}"
     build_dir="{{ build / '$artifact_fs' }}"
-
     echo "Building firmware for $artifact..."
 
     # Check if zephyr/module.yml exists to determine whether to include DZMK_EXTRA_MODULES
     if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
-        west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
-            -DZMK_CONFIG=""{{ zmk_config_root }}/config"" -DZMK_EXTRA_MODULES="{{ zmk_config_root }}" ${shield:+-DSHIELD="$shield"}
+        (
+            cd "{{ west_workspace }}"
+            west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
+                -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
+                -DZMK_CONFIG=""{{ zmk_config_root }}/config"" -DZMK_EXTRA_MODULES="{{ zmk_config_root }}" ${shield:+-DSHIELD="$shield"}
+        )
     else
-        west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
-            -DZMK_CONFIG=""{{ zmk_config_root }}/config"" ${shield:+-DSHIELD="$shield"}
+        (
+            cd "{{ west_workspace }}"
+            west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
+                -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
+                -DZMK_CONFIG=""{{ zmk_config_root }}/config"" ${shield:+-DSHIELD="$shield"}
+        )
     fi
 
     if [[ -f "$build_dir/zephyr/zmk.uf2" ]]; then
@@ -52,6 +97,10 @@ _build_single $board $shield $snippet $artifact *west_args:
 build expr *west_args:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container build "{{ expr }}" {{ west_args }}
+    fi
+
     targets=$(just _parse_targets {{ expr }})
 
     [[ -z $targets ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
@@ -63,9 +112,42 @@ build expr *west_args:
 clean:
     rm -rf {{ build }} {{ out }}
 
+# show ccache statistics
+ccache-stats *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container ccache-stats {{ args }}
+    fi
+
+    ccache -s {{ args }}
+
+# clear ccache data
+clean-ccache:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container clean-ccache
+    fi
+
+    ccache -C
+
 # clear all automatically generated files
 clean-all: clean
-    rm -rf .west zmk
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    generated=()
+    if [[ -d .west ]]; then
+        while IFS= read -r path; do
+            case "$path" in
+                "$(pwd)/config"| "$(pwd)/config/"*) ;;
+                "$(pwd)"/*) generated+=("$path") ;;
+            esac
+        done < <(WEST_TOPDIR="$(pwd)" west list -f '{abspath}' 2>/dev/null || true)
+    fi
+
+    rm -rf .west "{{ west_workspace }}" zmk zephyr modules "${generated[@]}"
 
 # clear nix cache
 clean-nix:
@@ -75,6 +157,9 @@ clean-nix:
 init *config_path:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container init {{ config_path }}
+    fi
 
     config_path="{{ config_path }}"
 
@@ -87,7 +172,7 @@ init *config_path:
         config_path=$(echo "$candidates" | fzf \
             --prompt="Select ZMK config: " \
             --header="Choose a configuration to initialize" \
-            --preview="ls -1a config/{}")
+            --preview="ls -1a {}")
 
         if [[ -z "$config_path" ]]; then
             echo "No config selected. Exiting..."
@@ -105,18 +190,123 @@ init *config_path:
     # Convert to path relative to config
     west_yml_rel=$(realpath --relative-to=config "$west_yml_abs")
 
-    rm -rf .west
-    west init -l config --mf "$west_yml_rel"
-    west update --fetch-opt=--filter=blob:none
-    west zephyr-export
+    rm -rf "{{ west_workspace }}"
+    mkdir -p "{{ west_workspace }}/.west"
+    printf '[manifest]\npath = ../config\nfile = %s\n' "$west_yml_rel" > "{{ west_workspace }}/.west/config"
+
+    (
+        cd "{{ west_workspace }}"
+        west update --fetch-opt=--filter=blob:none
+        west zephyr-export
+    )
 
 # list build targets
 list:
-    @just _parse_targets all | sed 's/,*$//' | sort | column
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container list
+    fi
+    just _parse_targets all | sed 's/,*$//' | sort | column
 
 # update west
 update:
-    west update --fetch-opt=--filter=blob:none
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container update
+    fi
+    (
+        cd "{{ west_workspace }}"
+        west update --fetch-opt=--filter=blob:none
+    )
+
+# draw keymap SVGs with keymap-drawer
+draw-keymap *names:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container draw-keymap {{ names }}
+    fi
+
+    config_root="{{ zmk_config_root }}"
+    keymap_dir="$config_root/keymap-drawer"
+    keymap_config="$keymap_dir/config.yaml"
+    mkdir -p "$keymap_dir"
+
+    keymap_config_args=()
+    if [[ -f "$keymap_config" ]]; then
+        keymap_config_args=(-c "$keymap_config")
+    fi
+
+    requested=({{ names }})
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        mapfile -t requested < <(find "$config_root/config" -maxdepth 1 -type f -name "*.keymap" -printf "%f\n" | sed "s/\\.keymap$//" | sort)
+    fi
+
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        echo "No keymap files found in $config_root/config" >&2
+        exit 1
+    fi
+
+    for name in "${requested[@]}"; do
+        keymap_file="$config_root/config/$name.keymap"
+        json_file="$config_root/config/$name.json"
+        yaml_file="$keymap_dir/$name.yaml"
+        svg_file="$keymap_dir/$name.svg"
+
+        if [[ ! -f "$keymap_file" ]]; then
+            echo "Keymap file not found: $keymap_file" >&2
+            exit 1
+        fi
+
+        echo "Drawing keymap for $name..."
+        just generate-keymap-json "$name"
+        keymap "${keymap_config_args[@]}" parse -z "$keymap_file" -o "$yaml_file"
+
+        draw_args=()
+        if [[ -f "$json_file" ]]; then
+            draw_args=(-j "$json_file")
+        fi
+        keymap "${keymap_config_args[@]}" draw "$yaml_file" "${draw_args[@]}" -o "$svg_file"
+        echo "Wrote $svg_file"
+    done
+
+# generate keymap-drawer JSON from ZMK physical layouts
+generate-keymap-json *names:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container generate-keymap-json {{ names }}
+    fi
+
+    config_root="{{ zmk_config_root }}"
+    requested=({{ names }})
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        mapfile -t requested < <(find "$config_root/config" -maxdepth 1 -type f -name "*.keymap" -printf "%f\n" | sed "s/\\.keymap$//" | sort)
+    fi
+
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        echo "No keymap files found in $config_root/config" >&2
+        exit 1
+    fi
+
+    for name in "${requested[@]}"; do
+        dtsi_file=$(find "$config_root/boards" -type f \( -name "$name.dtsi" -o -name "$name.overlay" \) | sort | head -n 1)
+        if [[ -z "$dtsi_file" ]]; then
+            echo "Physical layout source not found for $name under $config_root/boards" >&2
+            exit 1
+        fi
+
+        json_file="$config_root/config/$name.json"
+        layout_name="layout_$name"
+        echo "Generating $json_file from $dtsi_file..."
+        "{{ justfile_directory() }}/scripts/generate_keymap_drawer_json.py" \
+            "$dtsi_file" "$json_file" \
+            --layout "$layout_name" \
+            --id "$name" \
+            --name "$name"
+    done
 
 # upgrade zephyr-sdk and python dependencies
 upgrade-sdk:
@@ -185,6 +375,10 @@ flash expr *args:
 test $testpath *FLAGS:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container test "{{ testpath }}" {{ FLAGS }}
+    fi
+
     testcase=$(basename "$testpath")
     build_dir="{{ build / "tests" / '$testcase' }}"
     config_dir="{{ '$(pwd)' / '$testpath' }}"
@@ -193,9 +387,13 @@ test $testpath *FLAGS:
     if [[ "{{ FLAGS }}" != *"--no-build"* ]]; then
         echo "Running $testcase..."
         rm -rf "$build_dir"
-        west build -s zmk/app -d "$build_dir" -b native_posix_64 -- \
-            -DCONFIG_ASSERT=y -DZMK_CONFIG="$config_dir" \
-            ${ZMK_EXTRA_MODULES:+-DZMK_EXTRA_MODULES="$(realpath ${ZMK_EXTRA_MODULES})"}
+        (
+            cd "{{ west_workspace }}"
+            west build -s zmk/app -d "$build_dir" -b native_posix_64 -- \
+                -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
+                -DCONFIG_ASSERT=y -DZMK_CONFIG="$config_dir" \
+                ${ZMK_EXTRA_MODULES:+-DZMK_EXTRA_MODULES="$(realpath ${ZMK_EXTRA_MODULES})"}
+        )
     fi
 
     ${build_dir}/zephyr/zmk.exe | sed -e "s/.*> //" |

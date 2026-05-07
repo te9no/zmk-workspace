@@ -1,15 +1,20 @@
 {
   "name": "ZMK Development",
-  "image": "zmkfirmware/zmk-build-arm:stable",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "runArgs": ["--security-opt", "label=disable"],
   "containerEnv": {
     "WORKSPACE_DIR": "${containerWorkspaceFolder}",
     "PROMPT_COMMAND": "history -a",
     "ZMK_BUILD_DIR": "${containerWorkspaceFolder}/.build",
-    "ZMK_SRC_DIR": "${containerWorkspaceFolder}/zmk/app"
+    "ZMK_SRC_DIR": "${containerWorkspaceFolder}/.west-workspace/zmk/app",
+    "ZEPHYR_BASE": "${containerWorkspaceFolder}/.west-workspace/zephyr"
   },
   "workspaceFolder": "/zmk-workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/zmk-workspace,type=bind,consistency=cached",
+  "remoteUser": "ubuntu",
+  "updateRemoteUserUID": true,
   "customizations": {
     "vscode": {
       "extensions": ["ms-vscode.cpptools"],
@@ -19,5 +24,5 @@
     }
   },
   "forwardPorts": [3000],
-  "postCreateCommand": "apt-get update && apt-get install -y just yq bsdmainutils fzf && echo 'source /zmk-workspace/_just_completion.bash' >> ~/.bashrc"
+  "postCreateCommand": "echo 'source /zmk-workspace/_just_completion.bash' >> ~/.bashrc"
 }

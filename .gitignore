@@ -1,9 +1,13 @@
 .build
+.cache
 .direnv
+__pycache__
 .west
+.west-workspace
 modules
 firmware
 zephyr
 zmk
 draw/base.yaml
 .vscode/settings.json
+config/
