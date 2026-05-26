@@ -292,9 +292,9 @@ generate-keymap-json *names:
     fi
 
     for name in "${requested[@]}"; do
-        dtsi_file=$(find "$config_root/boards" -type f \( -name "$name.dtsi" -o -name "$name.overlay" \) | sort | head -n 1)
+        dtsi_file=$(find "$config_root" -path "$config_root/.git" -prune -o -type f \( -name "$name.dtsi" -o -name "$name.overlay" \) -print | sort | head -n 1)
         if [[ -z "$dtsi_file" ]]; then
-            echo "Physical layout source not found for $name under $config_root/boards" >&2
+            echo "Physical layout source not found for $name under $config_root" >&2
             exit 1
         fi
 
@@ -306,6 +306,50 @@ generate-keymap-json *names:
             --layout "$layout_name" \
             --id "$name" \
             --name "$name"
+    done
+
+# draw keymap SVGs directly from ZMK physical layouts and .keymap files
+draw-physical-layout *names:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container draw-physical-layout {{ names }}
+    fi
+
+    config_root="{{ zmk_config_root }}"
+    layout_dir="$config_root/keymap-svg"
+    mkdir -p "$layout_dir"
+
+    requested=({{ names }})
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        mapfile -t requested < <(find "$config_root/config" -maxdepth 1 -type f -name "*.keymap" -printf "%f\n" | sed "s/\\.keymap$//" | sort)
+    fi
+
+    if [[ ${#requested[@]} -eq 0 ]]; then
+        echo "No keymap files found in $config_root/config" >&2
+        exit 1
+    fi
+
+    for name in "${requested[@]}"; do
+        keymap_file="$config_root/config/$name.keymap"
+        dtsi_file=$(find "$config_root" -path "$config_root/.git" -prune -o -type f \( -name "$name.dtsi" -o -name "$name.overlay" \) -print | sort | head -n 1)
+        if [[ ! -f "$keymap_file" ]]; then
+            echo "Keymap file not found: $keymap_file" >&2
+            exit 1
+        fi
+        if [[ -z "$dtsi_file" ]]; then
+            echo "Physical layout source not found for $name under $config_root" >&2
+            exit 1
+        fi
+
+        svg_file="$layout_dir/$name.svg"
+        layout_name="layout_$name"
+        echo "Drawing keymap-svg keymap for $name..."
+        "{{ justfile_directory() }}/scripts/generate_physical_layout_svg.py" \
+            "$dtsi_file" "$svg_file" \
+            --keymap "$keymap_file" \
+            --layout "$layout_name"
+        echo "Wrote $svg_file"
     done
 
 # upgrade zephyr-sdk and python dependencies

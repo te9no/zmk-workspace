@@ -9,6 +9,7 @@ Difference from urob's zmk-config:
 - Supports extra modules for zmk-config and tests
 - Dev Container support
 - keymap-drawer support
+- Physical layout SVG preview support
 - Tab completion for `just build` and `just flash` with fzf
 - `just flash` is added for UF2 loader (Only works on Winodws(WSL) or macOS with Nix)
 - Keeps west-managed source checkouts under `.west-workspace/`
@@ -63,6 +64,37 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
    ./just.sh draw-keymap SAA
    ```
    This also regenerates `config/<name>.json` from the ZMK physical layout before drawing.
+
+8. Draw physical-layout-based keymap preview
+   ```sh
+   ./just.sh draw-physical-layout
+   ```
+   or draw a specific `config/*.keymap` basename
+   ```sh
+   ./just.sh draw-physical-layout SAA
+   ```
+   This writes `keymap-svg/<name>.svg` from the ZMK `zmk,physical-layout` node and `config/<name>.keymap`.
+
+9. Use the reusable GitHub Actions workflow
+
+   ZMK config repositories can call the workflow in this repository without copying the generator script into the firmware repository.
+
+   ```yaml
+   jobs:
+     draw-keymap-svg:
+       uses: te9no/zmk-workspace/.github/workflows/draw-keymap-svg.yml@main
+       permissions:
+         contents: write
+       with:
+         commit_message: "[Draw keymap-svg] ${{ github.event.head_commit.message || 'manual run' }}"
+         amend_commit: false
+         keymap_patterns: "config/*.keymap"
+         output_folder: "keymap-svg"
+         destination: "both"
+         artifact_name: "keymap-svg"
+   ```
+
+   The workflow checks out this repository separately and runs `scripts/generate_physical_layout_svg.py` from there.
 
 ## 日本語メモ
 
