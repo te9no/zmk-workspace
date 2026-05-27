@@ -49,6 +49,14 @@ class Layer:
     bindings: list[Binding]
 
 
+@dataclass
+class Combo:
+    name: str
+    binding: Binding
+    positions: list[int]
+    layers: list[int] | None = None
+
+
 def find_labeled_block(text, label):
     match = re.search(rf"\b{re.escape(label)}\s*:\s*[A-Za-z0-9_,@-]+\s*\{{", text)
     if not match:
@@ -341,6 +349,8 @@ def friendly_keycode(value):
         "COMMA": ",",
         "DOT": ".",
         "SPACE": "SPC",
+        "LANGUAGE_1": "LANG1",
+        "LANGUAGE_2": "LANG2",
     }
     if re.fullmatch(r"N\d", value):
         return value[1]
@@ -394,6 +404,43 @@ def parse_keymap_layers(keymap_path):
     if not layers:
         raise SystemExit(f"No keymap layers with bindings found in {keymap_path}")
     return layers
+
+
+def parse_int_list_property(block, name):
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*<(.*?)>;", block, re.S)
+    if not match:
+        return None
+    return [int(value) for value in re.findall(r"-?\d+", strip_comments(match.group(1)))]
+
+
+def parse_keymap_combos(keymap_path):
+    keymap_text = keymap_path.read_text()
+    try:
+        combos_block = find_named_block(keymap_text, "combos")
+    except SystemExit:
+        return []
+
+    combos = []
+    for name, block in iter_child_blocks(combos_block):
+        positions = parse_int_list_property(block, "key-positions")
+        if not positions:
+            continue
+
+        bindings_match = re.search(r"\bbindings\b\s*=\s*<(.*?)>;", block, re.S)
+        binding_groups = (
+            parse_binding_groups(bindings_match.group(1)) if bindings_match else []
+        )
+        binding = format_binding(binding_groups[0]) if binding_groups else Binding(name)
+        combos.append(
+            Combo(
+                name=name,
+                binding=binding,
+                positions=positions,
+                layers=parse_int_list_property(block, "layers"),
+            )
+        )
+
+    return combos
 
 
 def apply_positions(keys, positions):
@@ -468,6 +515,16 @@ def transform_key(key, min_x, min_y, scale, padding_x, padding_y):
     return x, y, rx, ry
 
 
+def transform_key_center(key, min_x, min_y, scale, padding_x, padding_y):
+    center_x = key.x + key.width / 2
+    center_y = key.y + key.height / 2
+    center_x, center_y = rotate_point(center_x, center_y, key.rotation, key.rx, key.ry)
+    return (
+        (center_x - min_x) * scale + padding_x,
+        (center_y - min_y) * scale + padding_y,
+    )
+
+
 def transform_module(module, min_x, min_y, scale, padding_x, padding_y):
     x = (module.x - min_x) * scale + padding_x
     y = (module.y - min_y) * scale + padding_y
@@ -524,7 +581,64 @@ def render_modules(lines, modules, min_x, min_y, key_unit_px, padding, header_he
         lines.append("</g>")
 
 
-def render_svg(keys, modules, title, output_path, key_unit_px, padding, show_row_col, layers):
+def combo_label(combo):
+    if combo.binding.hold:
+        return f"{combo.binding.hold} {combo.binding.tap}".strip()
+    return combo.binding.tap or combo.name
+
+
+def render_combos(
+    lines,
+    combos,
+    keys,
+    layer_index,
+    min_x,
+    min_y,
+    key_unit_px,
+    padding,
+    header_height,
+):
+    for combo in combos:
+        if combo.layers is not None and layer_index not in combo.layers:
+            continue
+
+        points = []
+        for position in combo.positions:
+            if position < 0 or position >= len(keys):
+                continue
+            points.append(
+                transform_key_center(
+                    keys[position],
+                    min_x,
+                    min_y,
+                    key_unit_px,
+                    padding,
+                    padding + header_height,
+                )
+            )
+        if len(points) < 2:
+            continue
+
+        point_attr = " ".join(f"{px(x)},{px(y)}" for x, y in points)
+        label_x = sum(x for x, _ in points) / len(points)
+        label_y = min(y for _, y in points) - 13
+        label = html.escape(combo_label(combo))
+        label_width = max(30, len(label) * 6.2 + 14)
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", combo.name)
+        lines.append(f'<g class="combo combo-{safe_name}">')
+        lines.append(f'<polyline points="{point_attr}"/>')
+        for x, y in points:
+            lines.append(f'<circle class="combo-dot" cx="{px(x)}" cy="{px(y)}" r="3.2"/>')
+        lines.append(
+            f'<rect class="combo-label-bg" x="{px(label_x - label_width / 2)}" y="{px(label_y - 8)}" width="{px(label_width)}" height="16" rx="8" ry="8"/>'
+        )
+        lines.append(
+            f'<text class="combo-label" x="{px(label_x)}" y="{px(label_y)}">{label}</text>'
+        )
+        lines.append("</g>")
+
+
+def render_svg(keys, modules, combos, title, output_path, key_unit_px, padding, show_row_col, layers):
     min_x, min_y, max_x, max_y = layout_bounds(keys, modules)
     header_height = 34
     layout_width = (max_x - min_x) * key_unit_px + padding * 2
@@ -550,6 +664,10 @@ def render_svg(keys, modules, title, output_path, key_unit_px, padding, show_row
         ".module text { text-anchor: middle; dominant-baseline: middle; fill: #24434a; }",
         ".module .module-label { font-size: 10px; font-weight: 700; }",
         ".module .module-type { font-size: 7.5px; fill: #527a82; }",
+        ".combo polyline { fill: none; stroke: #d46f2c; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; opacity: 0.92; }",
+        ".combo .combo-dot { fill: #d46f2c; stroke: #ffffff; stroke-width: 1.2; }",
+        ".combo .combo-label-bg { fill: #fff4df; stroke: #d46f2c; stroke-width: 1.1; }",
+        ".combo .combo-label { font-size: 9px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; fill: #6f330f; }",
         ".title { font-size: 16px; font-weight: 700; text-anchor: start; dominant-baseline: hanging; fill: #1d2520; }",
         ".subtitle { font-size: 10px; fill: #69736c; text-anchor: start; dominant-baseline: hanging; }",
         ".origin { fill: #d1495b; opacity: 0.75; }",
@@ -597,6 +715,17 @@ def render_svg(keys, modules, title, output_path, key_unit_px, padding, show_row
             lines.append("</g>")
             if key.rotation and not layer.bindings:
                 lines.append(f'<circle class="origin" cx="{px(rx)}" cy="{px(ry)}" r="2.5"/>')
+        render_combos(
+            lines,
+            combos,
+            keys,
+            layer_index,
+            min_x,
+            min_y,
+            key_unit_px,
+            padding,
+            header_height,
+        )
         lines.append("</g>")
 
     lines.append("</svg>")
@@ -616,6 +745,7 @@ def generate(input_path, output_path, layout_name, keymap_path, key_unit_px, pad
     apply_positions(keys, parse_transform_positions(text, layout_block))
     title = parse_display_name(layout_block, layout_label)
     layers = parse_keymap_layers(keymap_path) if keymap_path else []
+    combos = parse_keymap_combos(keymap_path) if keymap_path else []
 
     for layer in layers:
         if len(layer.bindings) != len(keys):
@@ -623,7 +753,7 @@ def generate(input_path, output_path, layout_name, keymap_path, key_unit_px, pad
                 f"Warning: layer {layer.label} binding count ({len(layer.bindings)}) does not match key count ({len(keys)}); labels will be partial."
             )
 
-    render_svg(keys, modules, title, output_path, key_unit_px, padding, show_row_col, layers)
+    render_svg(keys, modules, combos, title, output_path, key_unit_px, padding, show_row_col, layers)
 
 
 def main():

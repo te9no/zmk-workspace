@@ -73,7 +73,7 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
    ```sh
    ./just.sh draw-physical-layout SAA
    ```
-   This writes `keymap-svg/<name>.svg` from the ZMK `zmk,physical-layout` node and `config/<name>.keymap`.
+   This writes `keymap-svg/<name>.svg` from the ZMK `zmk,physical-layout` node and `config/<name>.keymap`. ZMK `combos` are drawn as overlays connecting their `key-positions`.
 
 9. Use the reusable GitHub Actions workflow
 
