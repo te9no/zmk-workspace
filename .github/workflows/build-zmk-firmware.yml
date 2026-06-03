@@ -1,4 +1,4 @@
-name: Build ZMK firmware
+name: 🧭 Build ZMK firmware
 
 on:
   workflow_call:
@@ -68,22 +68,22 @@ permissions:
 jobs:
   matrix:
     runs-on: ubuntu-latest
-    name: Compose Build Matrix
+    name: 🧭 Compose build constellation
     outputs:
       matrix: ${{ steps.compose.outputs.matrix }}
       has_targets: ${{ steps.compose.outputs.has_targets }}
     steps:
-      - name: Checkout config repository
+      - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
-      - name: Checkout ZMK workspace tools
+      - name: 🧰 Checkout ZMK workspace tools
         uses: actions/checkout@v4
         with:
           repository: ${{ inputs.tool_repository }}
           ref: ${{ inputs.tool_ref }}
           path: .zmk-workspace-tools
 
-      - name: Compose matrix from build.yaml
+      - name: 🗺️ Compose matrix from build.yaml
         id: compose
         env:
           TARGET: ${{ inputs.target }}
@@ -92,14 +92,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ ! -f "$BUILD_YAML" ]; then
-            echo "Build matrix file not found: $BUILD_YAML" >&2
+            echo "❌ Build matrix file not found: $BUILD_YAML" >&2
             exit 1
           fi
           if [ ! -f "$MATRIX_SCRIPT" ]; then
-            echo "Matrix composer script not found: $MATRIX_SCRIPT" >&2
+            echo "❌ Matrix composer script not found: $MATRIX_SCRIPT" >&2
             exit 1
           fi
 
+          echo "🧭 Reading build matrix: $BUILD_YAML"
+          echo "🎯 Target filter: $TARGET"
           matrix_json="$(ruby "$MATRIX_SCRIPT" "$BUILD_YAML" "$TARGET")"
           echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
 
@@ -110,13 +112,24 @@ jobs:
             echo "has_targets=false" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "Selected ${count} build target(s)."
-          printf '%s' "$matrix_json" | ruby -rjson -e 'JSON.parse(STDIN.read).fetch("include", []).each { |t| puts "- #{t["artifact-name"] || [t["shield"], t["board"]].compact.join("-")}" }'
+          echo "✨ Selected ${count} build target(s)."
+          printf '%s' "$matrix_json" | ruby -rjson -e 'JSON.parse(STDIN.read).fetch("include", []).each { |t| puts "  🌟 #{t["artifact-name"] || [t["shield"], t["board"]].compact.join("-")}" }'
 
           if [ "$count" -eq 0 ] && [ "${{ inputs.fail_on_no_targets }}" = "true" ]; then
-            echo "No build targets selected." >&2
+            echo "❌ No build targets selected." >&2
             exit 1
           fi
+
+          {
+            echo "## 🧭 Build Constellation"
+            echo
+            echo "- 🎯 Target filter: \`$TARGET\`"
+            echo "- 📄 Matrix file: \`$BUILD_YAML\`"
+            echo "- ✨ Selected targets: **$count**"
+            echo
+            echo "### 🌟 Targets"
+            printf '%s' "$matrix_json" | ruby -rjson -e 'JSON.parse(STDIN.read).fetch("include", []).each { |t| puts "- 🌟 `#{t["artifact-name"] || [t["shield"], t["board"]].compact.join("-")}`" }'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   prepare-west:
     runs-on: ubuntu-latest
@@ -124,12 +137,12 @@ jobs:
       image: ${{ inputs.container_image }}
     needs: matrix
     if: needs.matrix.outputs.has_targets == 'true'
-    name: Prepare west workspace
+    name: 🧰 Prepare west workspace
     steps:
-      - name: Checkout config repository
+      - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
-      - name: Prepare variables
+      - name: 🧭 Prepare workspace variables
         shell: bash
         run: |
           set -euo pipefail
@@ -143,8 +156,9 @@ jobs:
           fi
 
           echo "base_dir=${base_dir}" >> "$GITHUB_ENV"
+          echo "🧭 Base directory: $base_dir"
 
-      - name: Restore west workspace cache
+      - name: 🧊 Restore west workspace cache
         uses: actions/cache@v4
         continue-on-error: true
         with:
@@ -159,20 +173,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-west-
 
-      - name: West init
+      - name: 🏗️ West init
         working-directory: ${{ env.base_dir }}
         run: |
           if [ ! -d .west ]; then
+            echo "🏗️ Initializing west workspace"
             west init -l "${{ env.base_dir }}/config"
+          else
+            echo "✅ West workspace already initialized"
           fi
 
-      - name: West update
+      - name: 🛰️ West update
         working-directory: ${{ env.base_dir }}
-        run: west update --fetch-opt=--filter=tree:0
+        run: |
+          echo "🛰️ Updating west modules with partial clone fetch filter"
+          west update --fetch-opt=--filter=tree:0
 
-      - name: West Zephyr export
+      - name: 📡 West Zephyr export
         working-directory: ${{ env.base_dir }}
-        run: west zephyr-export
+        run: |
+          echo "📡 Exporting Zephyr CMake package"
+          west zephyr-export
 
   build:
     runs-on: ubuntu-latest
@@ -182,19 +203,22 @@ jobs:
       - matrix
       - prepare-west
     if: needs.matrix.outputs.has_targets == 'true'
-    name: Build ${{ matrix['artifact-name'] || matrix.shield || matrix.board }}
+    name: 🔨 Build ${{ matrix['artifact-name'] || matrix.shield || matrix.board }}
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.max_parallel }}
       matrix: ${{ fromJson(needs.matrix.outputs.matrix) }}
     steps:
-      - name: Checkout config repository
+      - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
-      - name: Create build directory
-        run: echo "build_dir=$(mktemp -d)" >> "$GITHUB_ENV"
+      - name: 🗂️ Create build directory
+        run: |
+          build_dir="$(mktemp -d)"
+          echo "build_dir=$build_dir" >> "$GITHUB_ENV"
+          echo "🗂️ Build directory: $build_dir"
 
-      - name: Prepare variables
+      - name: 🧭 Prepare build variables
         shell: bash
         env:
           BOARD: ${{ matrix.board }}
@@ -226,8 +250,12 @@ jobs:
           echo "zmk_load_arg=${zmk_load_arg}" >> "$GITHUB_ENV"
           echo "artifact_name=${artifact_name}" >> "$GITHUB_ENV"
           echo "display_name=${display_name}" >> "$GITHUB_ENV"
+          echo "🎛️ Board: ${BOARD}"
+          echo "🛡️ Shield: ${SHIELD:-none}"
+          echo "🧩 Snippet: ${SNIPPET:-none}"
+          echo "📦 Artifact: ${artifact_name}"
 
-      - name: Cache west modules
+      - name: 🧊 Cache west modules
         uses: actions/cache@v4
         continue-on-error: true
         with:
@@ -242,7 +270,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-west-
 
-      - name: Cache ccache
+      - name: ⚡ Cache ccache
         uses: actions/cache@v4
         continue-on-error: true
         with:
@@ -252,28 +280,36 @@ jobs:
             ${{ runner.os }}-ccache-${{ github.ref_name }}-
             ${{ runner.os }}-ccache-
 
-      - name: West init
+      - name: 🏗️ West init
         working-directory: ${{ env.base_dir }}
         run: |
           if [ ! -d .west ]; then
+            echo "🏗️ Initializing west workspace"
             west init -l "${{ env.base_dir }}/config"
+          else
+            echo "✅ West workspace already initialized"
           fi
 
-      - name: West update
+      - name: 🛰️ West update
         working-directory: ${{ env.base_dir }}
-        run: west update --fetch-opt=--filter=tree:0
+        run: |
+          echo "🛰️ Updating west modules"
+          west update --fetch-opt=--filter=tree:0
 
-      - name: West Zephyr export
+      - name: 📡 West Zephyr export
         working-directory: ${{ env.base_dir }}
-        run: west zephyr-export
+        run: |
+          echo "📡 Exporting Zephyr CMake package"
+          west zephyr-export
 
-      - name: Prepare ccache
+      - name: ⚡ Prepare ccache
         run: |
           mkdir -p "$GITHUB_WORKSPACE/.ccache"
+          echo "⚡ Resetting ccache statistics"
           ccache -z || true
           ccache -s || true
 
-      - name: West build (${{ env.display_name }})
+      - name: 🔨 West build (${{ env.display_name }})
         working-directory: ${{ env.base_dir }}
         shell: bash
         env:
@@ -303,6 +339,12 @@ jobs:
             zmk_load_args=("$zmk_load_arg")
           fi
 
+          echo "🚀 Starting ZMK build"
+          echo "🎛️ BOARD=$BOARD"
+          echo "🛡️ SHIELD=${SHIELD:-none}"
+          echo "🧩 SNIPPET=${SNIPPET:-none}"
+          echo "🧱 CMAKE_ARGS=${CMAKE_ARGS:-none}"
+
           # shellcheck disable=SC2086
           west build \
             -s zmk/app \
@@ -317,20 +359,20 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             ${CMAKE_ARGS:-}
 
-      - name: ccache statistics
+      - name: 📊 ccache statistics
         if: ${{ !cancelled() }}
         run: ccache -s || true
 
-      - name: Kconfig output (${{ env.display_name }})
+      - name: 🧾 Kconfig output (${{ env.display_name }})
         if: ${{ !cancelled() }}
         run: |
           if [ -f "${{ env.build_dir }}/zephyr/.config" ]; then
             grep -v -e '^#' -e '^$' "${{ env.build_dir }}/zephyr/.config" | sort
           else
-            echo "No Kconfig output"
+            echo "⚠️ No Kconfig output"
           fi
 
-      - name: Devicetree output (${{ env.display_name }})
+      - name: 🌳 Devicetree output (${{ env.display_name }})
         if: ${{ !cancelled() }}
         run: |
           if [ -f "${{ env.build_dir }}/zephyr/zephyr.dts" ]; then
@@ -338,24 +380,26 @@ jobs:
           elif [ -f "${{ env.build_dir }}/zephyr/zephyr.dts.pre" ]; then
             cat -s "${{ env.build_dir }}/zephyr/zephyr.dts.pre"
           else
-            echo "No Devicetree output"
+            echo "⚠️ No Devicetree output"
           fi
 
-      - name: Collect firmware
+      - name: 📦 Collect firmware
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "${{ env.build_dir }}/artifacts"
           if [ -f "${{ env.build_dir }}/zephyr/zmk.uf2" ]; then
             cp "${{ env.build_dir }}/zephyr/zmk.uf2" "${{ env.build_dir }}/artifacts/${{ env.artifact_name }}.uf2"
+            echo "📦 Collected UF2: ${{ env.artifact_name }}.uf2"
           elif [ -f "${{ env.build_dir }}/zephyr/zmk.bin" ]; then
             cp "${{ env.build_dir }}/zephyr/zmk.bin" "${{ env.build_dir }}/artifacts/${{ env.artifact_name }}.bin"
+            echo "📦 Collected BIN: ${{ env.artifact_name }}.bin"
           else
-            echo "No firmware output found" >&2
+            echo "❌ No firmware output found" >&2
             exit 1
           fi
 
-      - name: Upload firmware artifact
+      - name: ⬆️ Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: artifact-${{ env.artifact_name }}
@@ -368,10 +412,10 @@ jobs:
       - build
     if: ${{ always() && needs.matrix.outputs.has_targets == 'true' && needs.build.result != 'cancelled' }}
     steps:
-      - name: Checkout config repository
+      - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
-      - name: Get branch name
+      - name: 🧭 Get branch name
         id: branch-name
         shell: bash
         run: |
@@ -382,13 +426,16 @@ jobs:
           safe_branch="$(printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g')"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "safe_branch=${safe_branch}" >> "$GITHUB_OUTPUT"
+          echo "🧭 Branch: $branch"
+          echo "🧼 Safe branch: $safe_branch"
 
-      - name: Prepare firmware directory
+      - name: 🗂️ Prepare firmware directory
         run: |
           mkdir -p "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"
           rm -rf "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"/*
+          echo "🗂️ Firmware directory: ${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"
 
-      - name: Download firmware artifacts
+      - name: ⬇️ Download firmware artifacts
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
@@ -396,19 +443,28 @@ jobs:
           pattern: artifact-*
           merge-multiple: true
 
-      - name: Check downloaded firmware
+      - name: 🔍 Check downloaded firmware
         id: firmware-files
         run: |
           count="$(find "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}" -type f | wc -l)"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           if [ "$count" -gt 0 ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Downloaded ${count} firmware file(s)."
           else
             echo "has_files=false" >> "$GITHUB_OUTPUT"
-            echo "No successful firmware artifacts were found."
+            echo "⚠️ No successful firmware artifacts were found."
           fi
+          {
+            echo "## 📦 Firmware Publish"
+            echo
+            echo "- 🧭 Branch: \`${{ steps.branch-name.outputs.branch }}\`"
+            echo "- 🧼 Safe branch: \`${{ steps.branch-name.outputs.safe_branch }}\`"
+            echo "- 📁 Folder: \`${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}\`"
+            echo "- 📦 Firmware files: **${count}**"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Commit firmware
+      - name: 💾 Commit firmware
         if: steps.firmware-files.outputs.has_files == 'true' && inputs.commit_firmware == true
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
@@ -417,7 +473,7 @@ jobs:
           commit_options: --no-verify
           push_options: --no-verify
 
-      - name: Upload merged firmware
+      - name: 🎁 Upload merged firmware
         if: steps.firmware-files.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
         with:
