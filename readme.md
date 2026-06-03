@@ -96,6 +96,50 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
 
    The workflow checks out this repository separately and runs `scripts/generate_physical_layout_svg.py` from there.
 
+10. Use the reusable firmware build workflow
+
+   ZMK config repositories can also call the firmware build workflow in this repository without copying the matrix composer script or the full build job into each config repository.
+
+   ```yaml
+   name: Build ZMK firmware
+
+   on:
+     workflow_dispatch:
+       inputs:
+         target:
+           description: "Regex matched against artifact-name, board, shield, and snippet. Use 'all' for every target."
+           required: false
+           default: "all"
+         commit_firmware:
+           description: "Commit built firmware files back to this branch."
+           required: false
+           default: true
+           type: boolean
+     push:
+       paths:
+         - "config/**"
+         - "boards/**"
+         - "snippets/**"
+         - "build.yaml"
+         - "zephyr/module.yml"
+         - ".github/workflows/build.yml"
+
+   jobs:
+     build:
+       uses: te9no/zmk-workspace/.github/workflows/build-zmk-firmware.yml@main
+       permissions:
+         contents: write
+         actions: read
+       with:
+         target: ${{ inputs.target || 'all' }}
+         commit_firmware: ${{ inputs.commit_firmware != false }}
+         build_yaml: "build.yaml"
+         firmware_folder: "firmware"
+         max_parallel: 4
+   ```
+
+   The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, uploads each successful firmware artifact, and optionally commits merged firmware files under `firmware/<safe-branch-name>/`.
+
 ## 日本語メモ
 
 このリポジトリは、WSL 上でファイルを編集し、ビルドに必要な ZMK / Zephyr のツールチェーンだけを Docker コンテナ内で実行するためのワークスペースです。VS Code の Dev Container 内でファイルを作ると、WSL 側から編集や削除がしづらくなることがあります。そのため、普段の編集対象は WSL のファイルとして保持し、`./just.sh` が必要なときだけコンテナを起動します。
