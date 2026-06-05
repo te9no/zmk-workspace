@@ -315,6 +315,55 @@ def strip_comments(text):
     return re.sub(r"//.*", "", text)
 
 
+def resolve_include_path(include_name, delimiter, source_path):
+    include_path = Path(include_name)
+    if include_path.is_absolute() and include_path.exists():
+        return include_path
+
+    candidates = [source_path.parent / include_name, Path.cwd() / include_name]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    # Angle includes often point to dt-bindings or module-provided helper files
+    # that are not needed for this lightweight layout parser.
+    if delimiter == "<":
+        return None
+
+    raise SystemExit(f"Could not resolve include {include_name!r} from {source_path}")
+
+
+def read_devicetree_with_includes(input_path, include_stack=None):
+    source_path = input_path.resolve()
+    include_stack = include_stack or []
+    if source_path in include_stack:
+        chain = " -> ".join(str(path) for path in [*include_stack, source_path])
+        raise SystemExit(f"Recursive devicetree include detected: {chain}")
+
+    text = source_path.read_text(encoding="utf-8-sig")
+    expanded_lines = []
+    include_pattern = re.compile(r'^\s*#include\s+([<"])([^>"]+)[>"]')
+    next_stack = [*include_stack, source_path]
+
+    for line in text.splitlines():
+        match = include_pattern.match(line)
+        if not match:
+            expanded_lines.append(line)
+            continue
+
+        delimiter, include_name = match.groups()
+        include_path = resolve_include_path(include_name, delimiter, source_path)
+        if include_path is None:
+            expanded_lines.append(line)
+            continue
+
+        expanded_lines.append(f"/* begin include {include_name} */")
+        expanded_lines.append(read_devicetree_with_includes(include_path, next_stack))
+        expanded_lines.append(f"/* end include {include_name} */")
+
+    return "\n".join(expanded_lines)
+
+
 def parse_binding_groups(bindings_text):
     tokens = strip_comments(bindings_text).replace("<", " ").replace(">", " ").split()
     groups = []
@@ -734,7 +783,7 @@ def render_svg(keys, modules, combos, title, output_path, key_unit_px, padding, 
 
 
 def generate(input_path, output_path, layout_name, keymap_path, key_unit_px, padding, show_row_col):
-    text = input_path.read_text()
+    text = read_devicetree_with_includes(input_path)
     layout_label = layout_name
     if layout_label and try_find_labeled_block(text, layout_label) is None:
         layout_label = None
