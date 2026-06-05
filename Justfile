@@ -64,6 +64,7 @@ _build_single $board $shield $snippet $artifact *west_args:
     #!/usr/bin/env bash
     set -euo pipefail
     artifact="${artifact:-${shield:+${shield// /+}-}${board}}"
+    echo "::zmk-build-start::${artifact}"
 
     # Board ids may contain '/' (e.g. xiao_ble//zmk). Slashes break cp paths and mkdir.
     artifact_fs="${artifact//\//-}"
@@ -74,14 +75,14 @@ _build_single $board $shield $snippet $artifact *west_args:
     if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
         (
             cd "{{ west_workspace }}"
-            west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
+            west build -p auto -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
                 -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
                 -DZMK_CONFIG=""{{ zmk_config_root }}/config"" -DZMK_EXTRA_MODULES="{{ zmk_config_root }}" ${shield:+-DSHIELD="$shield"}
         )
     else
         (
             cd "{{ west_workspace }}"
-            west build -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
+            west build -p auto -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
                 -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
                 -DZMK_CONFIG=""{{ zmk_config_root }}/config"" ${shield:+-DSHIELD="$shield"}
         )
@@ -92,6 +93,7 @@ _build_single $board $shield $snippet $artifact *west_args:
     else
         mkdir -p "{{ out }}" && cp "$build_dir/zephyr/zmk.bin" "{{ out }}/$artifact_fs.bin"
     fi
+    echo "::zmk-build-done::${artifact}"
 
 # build firmware for matching targets
 build expr *west_args:
@@ -101,12 +103,13 @@ build expr *west_args:
         exec just _container build "{{ expr }}" {{ west_args }}
     fi
 
-    targets=$(just _parse_targets {{ expr }})
+    targets="$(just _parse_targets {{ expr }})"
+    [[ -z "$targets" ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
 
-    [[ -z $targets ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
-    echo "$targets" | while IFS=, read -r board shield snippet artifact; do
+    while IFS=, read -r board shield snippet artifact; do
+        [[ -z "${board:-}" ]] && continue
         just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }}
-    done
+    done <<< "$targets"
 
 # clear build cache and artifacts
 clean:
@@ -172,6 +175,7 @@ init *config_path:
         config_path=$(echo "$candidates" | fzf \
             --prompt="Select ZMK config: " \
             --header="Choose a configuration to initialize" \
+            --color="fg:#000000,bg:#ffffff,fg+:#000000,bg+:#d9d9d9,hl:#005f87,hl+:#005f87,info:#444444,prompt:#005f87,pointer:#005f87,marker:#005f87,spinner:#005f87,header:#444444" \
             --preview="ls -1a {}")
 
         if [[ -z "$config_path" ]]; then
@@ -190,7 +194,6 @@ init *config_path:
     # Convert to path relative to config
     west_yml_rel=$(realpath --relative-to=config "$west_yml_abs")
 
-    rm -rf "{{ west_workspace }}"
     mkdir -p "{{ west_workspace }}/.west"
     printf '[manifest]\npath = ../config\nfile = %s\n' "$west_yml_rel" > "{{ west_workspace }}/.west/config"
 
@@ -404,11 +407,19 @@ flash expr *args:
     # macOS
     if [[ "$OSTYPE" == "darwin"* ]]; then
         echo "Flashing '$uf2_path'..."
-        ./flash.sh "$uf2_path"
+        if [[ -n "${FLASH_TARGET_MOUNT:-}" ]]; then
+            ./flash.sh "$uf2_path" "${FLASH_TARGET_MOUNT}"
+        else
+            ./flash.sh "$uf2_path"
+        fi
     # WSL
     elif grep -q -i "Microsoft" /proc/version; then
         echo "Flashing '$uf2_path'..."
-        powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w $uf2_path)"
+        if [[ -n "${FLASH_TARGET_DRIVE:-}" ]]; then
+            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w $uf2_path)" -DriveLetter "${FLASH_TARGET_DRIVE}"
+        else
+            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w $uf2_path)"
+        fi
     # Other: Not supported
     else
         echo "Flashing '$uf2_path' is not supported on this platform." >&2

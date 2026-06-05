@@ -9,11 +9,12 @@
 
 # Expect the full path to the UF2 file as the first argument
 if [ -z "$1" ]; then
-    echo "Usage: $0 <path_to_uf2_file>"
+    echo "Usage: $0 <path_to_uf2_file> [target_mount_or_volume_name]"
     exit 1
 fi
 
 UF2_FILE="$1"
+TARGET_HINT="${2:-}"
 
 # Check if the firmware file exists
 if [ ! -f "$UF2_FILE" ]; then
@@ -22,6 +23,22 @@ if [ ! -f "$UF2_FILE" ]; then
 fi
 
 echo "Firmware file: $UF2_FILE"
+if [ -n "$TARGET_HINT" ]; then
+    echo "Target mount hint: $TARGET_HINT"
+fi
+
+resolve_target_mount() {
+    local hint="$1"
+    if [ -z "$hint" ]; then
+        return 1
+    fi
+
+    if [[ "$hint" == /Volumes/* ]]; then
+        printf '%s\n' "$hint"
+    else
+        printf '/Volumes/%s\n' "$hint"
+    fi
+}
 
 # Checks if a given mount point is a UF2 bootloader device
 is_uf2_loader() {
@@ -63,14 +80,23 @@ trap 'echo -e "\nCancelled by user."; exit 0' INT
 
 # First, check already mounted drives
 echo "Checking existing drives for UF2 loader..."
-for drive_path in /Volumes/*; do
-    [ -e "$drive_path" ] || continue
-    if is_uf2_loader "$drive_path"; then
-        echo "UF2 loader found at \"$drive_path\""
-        write_firmware "$drive_path" "$UF2_FILE"
+if [ -n "$TARGET_HINT" ]; then
+    target_mount="$(resolve_target_mount "$TARGET_HINT")"
+    if is_uf2_loader "$target_mount"; then
+        echo "UF2 loader found at \"$target_mount\""
+        write_firmware "$target_mount" "$UF2_FILE"
         exit 0
     fi
-done
+else
+    for drive_path in /Volumes/*; do
+        [ -e "$drive_path" ] || continue
+        if is_uf2_loader "$drive_path"; then
+            echo "UF2 loader found at \"$drive_path\""
+            write_firmware "$drive_path" "$UF2_FILE"
+            exit 0
+        fi
+    done
+fi
 
 # If not found, wait for a new drive to be connected
 echo "No UF2 loader found. Waiting for new drive... (Press 'q' to cancel)"
@@ -93,6 +119,13 @@ while true; do
             [ -z "$drive" ] && continue
             echo "New drive detected: \"$drive\""
             mount_point="/Volumes/${drive}"
+            if [ -n "$TARGET_HINT" ]; then
+                target_mount="$(resolve_target_mount "$TARGET_HINT")"
+                if [ "$mount_point" != "$target_mount" ]; then
+                    echo "Drive \"$drive\" does not match target \"$TARGET_HINT\", skipping..."
+                    continue
+                fi
+            fi
             sleep 1
 
             if is_uf2_loader "$mount_point"; then

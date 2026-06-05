@@ -26,7 +26,7 @@ def find_labeled_block(text, label):
 
 
 def clean_number(value):
-    number = int(value)
+    number = int(value.strip("()")) if isinstance(value, str) else value
     scaled = number / 100
     return int(scaled) if scaled.is_integer() else scaled
 
@@ -38,10 +38,12 @@ def parse_key_attrs(layout_block):
 
     attrs = []
     for match in re.finditer(
-        r"<\s*&key_physical_attrs\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*>",
+        r"<\s*&key_physical_attrs\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s+(\(?-?\d+\)?)\s*>",
         keys_match.group(1),
     ):
-        width, height, x, y, rotation, rx, ry = map(int, match.groups())
+        width, height, x, y, rotation, rx, ry = (
+            int(value.strip("()")) for value in match.groups()
+        )
         key = {
             "x": clean_number(x),
             "y": clean_number(y),
@@ -51,7 +53,7 @@ def parse_key_attrs(layout_block):
         if height != 100:
             key["h"] = clean_number(height)
         if rotation != 0:
-            key["r"] = rotation
+            key["r"] = clean_number(rotation)
             key["rx"] = clean_number(rx)
             key["ry"] = clean_number(ry)
         attrs.append(key)

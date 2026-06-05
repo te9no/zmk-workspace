@@ -1,7 +1,9 @@
 # Get command line arguments
 param(
     [Parameter(Mandatory=$true)]
-    [string]$Uf2File
+    [string]$Uf2File,
+    [Parameter(Mandatory=$false)]
+    [string]$DriveLetter = ""
 )
 
 # Check if the drive is a UF2 loader
@@ -66,12 +68,19 @@ if (-not (Test-Path $Uf2File)) {
 }
 
 Write-Host "Firmware file: $Uf2File"
+if ($DriveLetter) {
+    $DriveLetter = $DriveLetter.Trim().TrimEnd(":").ToUpper()
+    Write-Host "Target drive hint: $DriveLetter"
+}
 
 # Check if there is a UF2 loader in the existing drives
 Write-Host "Checking existing drives for UF2 loader..."
 $initialDrives = Get-PSDrive -PSProvider FileSystem
 
 foreach ($drive in $initialDrives) {
+    if ($DriveLetter -and $drive.Name -ne $DriveLetter) {
+        continue
+    }
     if (Test-IsUf2Loader -DriveLetter $drive.Name) {
         Write-Host "UF2 loader found on drive $($drive.Name)"
         Write-Firmware -TargetDrive $drive.Name -SourceFile $Uf2File
@@ -105,6 +114,10 @@ try {
         if ($newDrives) {
             foreach ($newDrive in $newDrives) {
                 Write-Host "New drive detected: $($newDrive.Name)"
+                if ($DriveLetter -and $newDrive.Name -ne $DriveLetter) {
+                    Write-Host "Drive $($newDrive.Name) does not match target $DriveLetter, skipping..."
+                    continue
+                }
 
                 if (Test-IsUf2Loader -DriveLetter $newDrive.Name) {
                     Write-Host "UF2 loader detected on drive $($newDrive.Name)"

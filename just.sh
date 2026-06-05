@@ -98,6 +98,16 @@ if [[ -t 0 && -t 1 ]]; then
     docker_tty_args=(-it)
 fi
 
+cmake_build_parallel_level="${CMAKE_BUILD_PARALLEL_LEVEL:-}"
+if [[ -z "$cmake_build_parallel_level" && "$OSTYPE" == "darwin"* ]]; then
+    cmake_build_parallel_level=4
+fi
+
+docker_cmake_parallel_args=()
+if [[ -n "$cmake_build_parallel_level" ]]; then
+    docker_cmake_parallel_args=(--env "CMAKE_BUILD_PARALLEL_LEVEL=$cmake_build_parallel_level")
+fi
+
 exec docker run --rm \
     "${docker_tty_args[@]}" \
     --user "$(id -u):$(id -g)" \
@@ -112,6 +122,7 @@ exec docker run --rm \
     --env ZMK_BUILD_DIR="$workspace/.build" \
     --env ZMK_SRC_DIR="$workspace/.west-workspace/zmk/app" \
     --env ZEPHYR_BASE="$workspace/.west-workspace/zephyr" \
+    "${docker_cmake_parallel_args[@]}" \
     --volume "$repo_dir:$workspace" \
     --workdir "$workspace" \
     "$image" \
