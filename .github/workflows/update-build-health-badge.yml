@@ -1,0 +1,114 @@
+name: Update build health badge
+
+on:
+  workflow_call:
+    inputs:
+      status:
+        description: "Build result. Usually `${{ needs.build.result }}` or `${{ job.status }}`."
+        type: string
+        required: true
+      target:
+        description: "Build target filter used for the run."
+        type: string
+        required: false
+        default: "all"
+      badge_folder:
+        description: "Folder used for generated badge files."
+        type: string
+        required: false
+        default: "badges/build-health"
+      commit_badge:
+        description: "Commit generated badge files back to the caller branch."
+        type: boolean
+        required: false
+        default: true
+      tool_repository:
+        description: "Repository that contains .github/scripts/write-build-health-badge.py."
+        type: string
+        required: false
+        default: "te9no/zmk-workspace"
+      tool_ref:
+        description: "Git ref of tool_repository to use."
+        type: string
+        required: false
+        default: "main"
+      script_path:
+        description: "Path to the badge writer script inside tool_repository."
+        type: string
+        required: false
+        default: ".github/scripts/write-build-health-badge.py"
+    outputs:
+      badge_dir:
+        description: "Directory containing generated badge files."
+        value: ${{ jobs.update.outputs.badge_dir }}
+      badge_svg:
+        description: "Path to the generated SVG badge."
+        value: ${{ jobs.update.outputs.badge_svg }}
+      endpoint_json:
+        description: "Path to the shields.io endpoint JSON file."
+        value: ${{ jobs.update.outputs.endpoint_json }}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    name: Update build health badge
+    outputs:
+      badge_dir: ${{ steps.write.outputs.badge_dir }}
+      badge_svg: ${{ steps.write.outputs.badge_svg }}
+      endpoint_json: ${{ steps.write.outputs.endpoint_json }}
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+
+      - name: Checkout badge tools
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tool_repository }}
+          ref: ${{ inputs.tool_ref }}
+          path: .zmk-workspace-tools
+
+      - name: Write badge files
+        id: write
+        shell: bash
+        env:
+          STATUS: ${{ inputs.status }}
+          TARGET: ${{ inputs.target }}
+          BADGE_FOLDER: ${{ inputs.badge_folder }}
+          SCRIPT: .zmk-workspace-tools/${{ inputs.script_path }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$SCRIPT" ]; then
+            echo "Badge writer script not found: $SCRIPT" >&2
+            exit 1
+          fi
+
+          python3 "$SCRIPT" \
+            --status "$STATUS" \
+            --target "$TARGET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$GITHUB_REF_NAME" \
+            --sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER" \
+            --server-url "$GITHUB_SERVER_URL" \
+            --folder "$BADGE_FOLDER" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit badge files
+        if: inputs.commit_badge == true
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: ${{ inputs.badge_folder }}/**/*
+          commit_message: Update build health badge
+          commit_options: --no-verify
+          push_options: --no-verify
+
+      - name: Upload badge artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-health-badge
+          path: ${{ steps.write.outputs.badge_dir }}/*

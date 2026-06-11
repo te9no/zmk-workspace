@@ -23,6 +23,16 @@ on:
         type: string
         required: false
         default: "firmware"
+      update_build_health:
+        description: "Write build health badge files back to the caller branch."
+        type: boolean
+        required: false
+        default: false
+      badge_folder:
+        description: "Folder used for generated build health badge files."
+        type: string
+        required: false
+        default: "badges/build-health"
       container_image:
         description: "Container image used for west/ZMK builds."
         type: string
@@ -490,3 +500,58 @@ jobs:
         with:
           name: firmware-${{ steps.output-path.outputs.safe_repo }}-${{ steps.output-path.outputs.safe_branch }}
           path: ${{ steps.output-path.outputs.firmware_dir }}/*
+
+  build-health:
+    runs-on: ubuntu-latest
+    needs:
+      - matrix
+      - build
+      - publish
+    if: ${{ always() && inputs.update_build_health == true && needs.matrix.outputs.has_targets == 'true' }}
+    steps:
+      - name: 📥 Checkout config repository
+        uses: actions/checkout@v4
+
+      - name: 🧰 Checkout ZMK workspace tools
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tool_repository }}
+          ref: ${{ inputs.tool_ref }}
+          path: .zmk-workspace-tools
+
+      - name: 🩺 Write build health badge
+        id: write
+        shell: bash
+        env:
+          STATUS: ${{ needs.build.result }}
+          TARGET: ${{ inputs.target }}
+          BADGE_FOLDER: ${{ inputs.badge_folder }}
+          SCRIPT: .zmk-workspace-tools/.github/scripts/write-build-health-badge.py
+        run: |
+          set -euo pipefail
+          python3 "$SCRIPT" \
+            --status "$STATUS" \
+            --target "$TARGET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$GITHUB_REF_NAME" \
+            --sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-number "$GITHUB_RUN_NUMBER" \
+            --server-url "$GITHUB_SERVER_URL" \
+            --folder "$BADGE_FOLDER" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: 💾 Commit build health badge
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          file_pattern: ${{ inputs.badge_folder }}/**/*
+          commit_message: Update build health badge
+          commit_options: --no-verify
+          push_options: --no-verify
+
+      - name: 🎁 Upload build health badge
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-health-badge
+          path: ${{ steps.write.outputs.badge_dir }}/*

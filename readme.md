@@ -145,10 +145,45 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
          commit_firmware: ${{ inputs.commit_firmware != false }}
          build_yaml: "build.yaml"
          firmware_folder: "firmware"
+         update_build_health: true
+         badge_folder: "badges/build-health"
          max_parallel: 4
    ```
 
    The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, uploads each successful firmware artifact, and optionally commits merged firmware files under `firmware/<safe-repository-name>/<safe-branch-name>/`.
+
+   When `update_build_health` is enabled, the workflow also writes build health files under `badges/build-health/<safe-repository-name>/<safe-branch-name>/`:
+
+   - `build-health.svg`
+   - `build-health.json`
+   - `shields.json`
+
+   A README badge can reference the committed SVG:
+
+   ```md
+   ![build health](badges/build-health/zmk-config-your-keyboard/main/build-health.svg)
+   ```
+
+11. Use the reusable build health badge workflow directly
+
+   If you already have a custom build workflow, call the badge workflow from a final job:
+
+   ```yaml
+   jobs:
+     build:
+       # your build job here
+
+     build-health:
+       needs: build
+       if: always()
+       uses: te9no/zmk-workspace/.github/workflows/update-build-health-badge.yml@main
+       permissions:
+         contents: write
+       with:
+         status: ${{ needs.build.result }}
+         target: "all"
+         badge_folder: "badges/build-health"
+   ```
 
 ## 日本語メモ
 
