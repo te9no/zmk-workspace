@@ -8,7 +8,7 @@ ccache_dir="$repo_dir/.cache/ccache"
 dockerfile="$repo_dir/.devcontainer/Dockerfile"
 
 firmware_dir() {
-    local west_top west_config path file west_yml_path config_root config_name
+    local west_top west_config path file west_yml_path config_root config_name config_branch
 
     if [[ -f "$repo_dir/.west-workspace/.west/config" ]]; then
         west_top="$repo_dir/.west-workspace"
@@ -26,7 +26,13 @@ firmware_dir() {
     west_yml_path="$west_top/${path:-.}/${file}"
     config_root="$(dirname "$west_yml_path")/.."
     config_name="$(basename "$(realpath -m "$config_root")")"
-    printf '%s\n' "$repo_dir/firmware/$config_name"
+    if git -C "$config_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        config_branch="$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$config_root" rev-parse --short HEAD)"
+    else
+        config_branch="nogit"
+    fi
+    config_branch="$(printf '%s' "$config_branch" | sed 's/[":<>|*?\\\/]/-/g')"
+    printf '%s\n' "$repo_dir/firmware/$config_name/$config_branch"
 }
 
 if [[ "${1:-}" == "flash" ]]; then
@@ -79,6 +85,16 @@ if [[ "${1:-}" == "flash" ]]; then
         echo "Flashing '$uf2_path' is not supported on this platform." >&2
         exit 1
     fi
+fi
+
+if [[ "${1:-}" == "flash-log" ]]; then
+    shift
+    exec "$repo_dir/tools/zmk-flash-log.sh" "$@"
+fi
+
+if [[ "${1:-}" == "diagnose-ports" ]]; then
+    shift
+    exec "$repo_dir/tools/zmk-flash-log.sh" --diagnose "$@"
 fi
 
 dockerfile_hash="$(sha256sum "$dockerfile" | awk '{print $1}')"

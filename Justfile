@@ -39,7 +39,32 @@ zmk_config_name := `
   west_yml_path="$west_top/${path:-.}/${file}"
   basename "$(realpath -m "$(dirname "$west_yml_path")/..")"
 `
-out := absolute_path('firmware') / zmk_config_name
+zmk_config_branch := `
+  if [ -f .west-workspace/.west/config ]; then
+    west_top=".west-workspace"
+    west_config="$west_top/.west/config"
+  elif [ -f .west/config ]; then
+    west_top="."
+    west_config=".west/config"
+  else
+    echo "nogit"
+    exit 0
+  fi
+
+  path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+  file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+  west_yml_path="$west_top/${path:-.}/${file}"
+  config_root="$(realpath -m "$(dirname "$west_yml_path")/..")"
+
+  if git -C "$config_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    branch=$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$config_root" rev-parse --short HEAD)
+  else
+    branch="nogit"
+  fi
+
+  printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g'
+`
+out := absolute_path('firmware') / zmk_config_name / zmk_config_branch
 
 # run a just recipe in the build container
 _container *args:
@@ -110,6 +135,119 @@ build expr *west_args:
         [[ -z "${board:-}" ]] && continue
         just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }}
     done <<< "$targets"
+
+# build firmware for matching targets in parallel
+build-parallel expr jobs *west_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container build-parallel "{{ expr }}" "{{ jobs }}" {{ west_args }}
+    fi
+
+    if ! [[ "{{ jobs }}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "jobs must be a positive integer. Got: {{ jobs }}" >&2
+        exit 2
+    fi
+
+    targets="$(just _parse_targets {{ expr }})"
+    [[ -z "$targets" ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
+
+    # Avoid multiplying target-level parallelism by full per-target CMake parallelism.
+    export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
+
+    run_id="$(date +%Y%m%d-%H%M%S)"
+    log_dir="{{ build }}/logs/build-parallel-${run_id}"
+    status_dir="$log_dir/status"
+    mkdir -p "$status_dir"
+
+    total="$(printf '%s\n' "$targets" | grep -c '^[^,]')"
+
+    count_status() {
+        find "$status_dir" -type f -name "*.$1" 2>/dev/null | wc -l | tr -d ' '
+    }
+
+    print_progress() {
+        local done failed running pending
+        done="$(count_status done)"
+        failed="$(count_status failed)"
+        running="$(count_status running)"
+        pending=$((total - done - failed - running))
+
+        if [[ -t 1 ]]; then
+            printf '\033[2J\033[H'
+            printf 'ZMK parallel build\n'
+            printf '==================\n\n'
+            printf 'Targets: %s  Done: %s  Failed: %s  Running: %s  Pending: %s\n' \
+                "$total" "$done" "$failed" "$running" "$pending"
+            printf 'Target jobs: {{ jobs }}  CMAKE_BUILD_PARALLEL_LEVEL: %s\n' "$CMAKE_BUILD_PARALLEL_LEVEL"
+            printf 'Logs: %s\n\n' "$log_dir"
+            printf 'Running:\n'
+            find "$status_dir" -type f -name "*.running" -printf '  - %f\n' 2>/dev/null | sed 's/\.running$//' || true
+            printf '\nCompleted:\n'
+            find "$status_dir" -type f -name "*.done" -printf '  - %f\n' 2>/dev/null | sed 's/\.done$//' || true
+            printf '\nFailed:\n'
+            find "$status_dir" -type f -name "*.failed" -printf '  - %f\n' 2>/dev/null | sed 's/\.failed$//' || true
+        else
+            printf '[%s] total=%s done=%s failed=%s running=%s pending=%s logs=%s\n' \
+                "$(date +%H:%M:%S)" "$total" "$done" "$failed" "$running" "$pending" "$log_dir"
+        fi
+    }
+
+    echo "Building matching targets with target parallelism={{ jobs }}, CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL}"
+    echo "Full logs will be written to: $log_dir"
+    print_progress
+
+    status=0
+    while IFS=, read -r board shield snippet artifact; do
+        [[ -z "${board:-}" ]] && continue
+        artifact_name="${artifact:-${shield:+${shield// /+}-}${board}}"
+        artifact_fs="${artifact_name//\//-}"
+        log_file="$log_dir/${artifact_fs}.log"
+        running_file="$status_dir/${artifact_fs}.running"
+        done_file="$status_dir/${artifact_fs}.done"
+        failed_file="$status_dir/${artifact_fs}.failed"
+
+        (
+            set -euo pipefail
+            printf 'board=%s\nshield=%s\nsnippet=%s\nartifact=%s\n\n' \
+                "$board" "$shield" "$snippet" "$artifact" > "$log_file"
+            touch "$running_file"
+            if just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }} >> "$log_file" 2>&1; then
+                rm -f "$running_file"
+                touch "$done_file"
+            else
+                rc=$?
+                rm -f "$running_file"
+                printf '%s\n' "$rc" > "$failed_file"
+                exit "$rc"
+            fi
+        ) &
+
+        while (( $(jobs -pr | wc -l) >= {{ jobs }} )); do
+            wait -n || status=1
+            print_progress
+        done
+    done <<< "$targets"
+
+    while (( $(jobs -pr | wc -l) > 0 )); do
+        wait -n || status=1
+        print_progress
+    done
+
+    print_progress
+
+    if (( status != 0 )); then
+        echo
+        echo "One or more targets failed. Showing the last 80 log lines for each failed target:"
+        while IFS= read -r failed_marker; do
+            artifact_fs="$(basename "$failed_marker" .failed)"
+            echo
+            echo "---- $artifact_fs ----"
+            tail -80 "$log_dir/${artifact_fs}.log" || true
+        done < <(find "$status_dir" -type f -name "*.failed" | sort)
+    fi
+
+    exit "$status"
 
 # clear build cache and artifacts
 clean:

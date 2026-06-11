@@ -21,7 +21,7 @@ Difference from urob's zmk-config:
 > [!important]
 > On Windows, it is recommended that the workspace be located on WSL-native location (outside of `/mnt/c/`). Syncing the directory between Windows and WSL / container will result in significantly slower builds.
 
-On WSL, you can edit files directly in the WSL workspace and run `./just.sh init`, `./just.sh update`, `./just.sh list`, `./just.sh build`, `./just.sh test`, and `./just.sh flash` from WSL. Build-related commands execute `just` and the ZMK toolchain inside Docker using `.devcontainer/Dockerfile`, while generated files remain owned by your WSL user. West-managed source checkouts are placed under `.west-workspace/` instead of the repository root. Firmware files are written to `firmware/<config-folder>/`. Flashing stays on the WSL host so it can call PowerShell and access the UF2 drive.
+On WSL, you can edit files directly in the WSL workspace and run `./just.sh init`, `./just.sh update`, `./just.sh list`, `./just.sh build`, `./just.sh test`, and `./just.sh flash` from WSL. Build-related commands execute `just` and the ZMK toolchain inside Docker using `.devcontainer/Dockerfile`, while generated files remain owned by your WSL user. West-managed source checkouts are placed under `.west-workspace/` instead of the repository root. Firmware files are written to `firmware/<config-folder>/<branch>/`. Flashing stays on the WSL host so it can call PowerShell and access the UF2 drive.
 
 Builds use `ccache` inside the container. The cache is stored at `.cache/ccache` on the WSL filesystem and is ignored by Git. You can inspect it with `./just.sh ccache-stats` and clear it with `./just.sh clean-ccache`. The default cache limit is 5 GiB; override it with `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all`.
 
@@ -54,6 +54,16 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
    ```sh
    ./just.sh flash [target] -r
    ```
+
+   On Windows/WSL, boards that include a 1200-baud CDC ACM bootloader trigger can also be flashed and logged in one loop:
+   ```sh
+   ./just.sh flash-log [target-or-uf2] COM12 --build --seconds 90
+   ```
+   To inspect visible COM ports and mounted UF2 drives without flashing:
+   ```sh
+   ./just.sh diagnose-ports COM12
+   ```
+   See [`docs/zmk-flash-log-loop.md`](docs/zmk-flash-log-loop.md) for the reusable protocol.
 
 7. Draw keymap
    ```sh
@@ -138,7 +148,7 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
          max_parallel: 4
    ```
 
-   The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, uploads each successful firmware artifact, and optionally commits merged firmware files under `firmware/<safe-branch-name>/`.
+   The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, uploads each successful firmware artifact, and optionally commits merged firmware files under `firmware/<safe-repository-name>/<safe-branch-name>/`.
 
 ## 日本語メモ
 
@@ -152,9 +162,23 @@ Builds use `ccache` inside the container. The cache is stored at `.cache/ccache`
 ./just.sh draw-keymap
 ```
 
+USB CDC ACM の 1200 baud bootloader trigger が入ったファームウェアでは、ビルド、UF2 書き込み、シリアルログ取得をまとめて実行できます。
+
+```sh
+./just.sh flash-log MY_KEYBOARD_RIGHT COM12 --build --seconds 90
+```
+
+書き込み前に Windows 側で見えている COM ポートと UF2 ドライブだけ確認する場合です。
+
+```sh
+./just.sh diagnose-ports COM12
+```
+
+詳細は `docs/zmk-flash-log-loop.md` にまとめています。
+
 `init` で取得される ZMK / Zephyr / modules などの west 管理ファイルは、リポジトリ直下ではなく `.west-workspace/` に作られます。作業用リポジトリの直下が west のクローンで散らからないようにするためです。
 
-ビルド結果の UF2 ファイルは config ごとに分けて、`firmware/<config-folder>/` に出力されます。たとえば `config/zmk-config-SparAkashaAnanta` を使っている場合は、`firmware/zmk-config-SparAkashaAnanta/` に生成されます。
+ビルド結果の UF2 ファイルは config とブランチごとに分けて、`firmware/<config-folder>/<branch>/` に出力されます。たとえば `config/zmk-config-SparAkashaAnanta` の `feat/add-iqs-module-and-led-support` ブランチを使っている場合は、`firmware/zmk-config-SparAkashaAnanta/feat-add-iqs-module-and-led-support/` に生成されます。
 
 ビルド時はコンテナ内で `ccache` を使います。キャッシュ本体は WSL 側の `.cache/ccache` に保存され、Git には含めません。状態を見るには `./just.sh ccache-stats`、キャッシュを消すには `./just.sh clean-ccache` を使います。既定の上限は 5 GiB で、必要なら `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all` のように増やせます。
 

@@ -1,9 +1,12 @@
 .build
 .cache
 .direnv
+.codex-remote-attachments
+.tmp-*
 __pycache__
 .west
 .west-workspace
+logs
 modules
 firmware
 zephyr

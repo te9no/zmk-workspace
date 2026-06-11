@@ -415,38 +415,47 @@ jobs:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
-      - name: 🧭 Get branch name
-        id: branch-name
+      - name: 🧭 Get repository and branch names
+        id: output-path
         shell: bash
         run: |
           branch="${GITHUB_REF#refs/heads/}"
           if [ "$branch" = "$GITHUB_REF" ]; then
             branch="${GITHUB_REF_NAME}"
           fi
+          repo="${GITHUB_REPOSITORY#*/}"
+          safe_repo="$(printf '%s' "$repo" | sed 's/[":<>|*?\\\/]/-/g')"
           safe_branch="$(printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g')"
+          firmware_dir="${{ inputs.firmware_folder }}/${safe_repo}/${safe_branch}"
+          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
+          echo "safe_repo=${safe_repo}" >> "$GITHUB_OUTPUT"
           echo "branch=${branch}" >> "$GITHUB_OUTPUT"
           echo "safe_branch=${safe_branch}" >> "$GITHUB_OUTPUT"
+          echo "firmware_dir=${firmware_dir}" >> "$GITHUB_OUTPUT"
+          echo "📦 Repository: $repo"
+          echo "🧼 Safe repository: $safe_repo"
           echo "🧭 Branch: $branch"
           echo "🧼 Safe branch: $safe_branch"
+          echo "📁 Firmware directory: $firmware_dir"
 
       - name: 🗂️ Prepare firmware directory
         run: |
-          mkdir -p "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"
-          rm -rf "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"/*
-          echo "🗂️ Firmware directory: ${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}"
+          mkdir -p "${{ steps.output-path.outputs.firmware_dir }}"
+          rm -rf "${{ steps.output-path.outputs.firmware_dir }}"/*
+          echo "🗂️ Firmware directory: ${{ steps.output-path.outputs.firmware_dir }}"
 
       - name: ⬇️ Download firmware artifacts
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          path: ${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}
+          path: ${{ steps.output-path.outputs.firmware_dir }}
           pattern: artifact-*
           merge-multiple: true
 
       - name: 🔍 Check downloaded firmware
         id: firmware-files
         run: |
-          count="$(find "${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}" -type f | wc -l)"
+          count="$(find "${{ steps.output-path.outputs.firmware_dir }}" -type f | wc -l)"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           if [ "$count" -gt 0 ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
@@ -458,9 +467,11 @@ jobs:
           {
             echo "## 📦 Firmware Publish"
             echo
-            echo "- 🧭 Branch: \`${{ steps.branch-name.outputs.branch }}\`"
-            echo "- 🧼 Safe branch: \`${{ steps.branch-name.outputs.safe_branch }}\`"
-            echo "- 📁 Folder: \`${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}\`"
+            echo "- 📦 Repository: \`${{ steps.output-path.outputs.repo }}\`"
+            echo "- 🧼 Safe repository: \`${{ steps.output-path.outputs.safe_repo }}\`"
+            echo "- 🧭 Branch: \`${{ steps.output-path.outputs.branch }}\`"
+            echo "- 🧼 Safe branch: \`${{ steps.output-path.outputs.safe_branch }}\`"
+            echo "- 📁 Folder: \`${{ steps.output-path.outputs.firmware_dir }}\`"
             echo "- 📦 Firmware files: **${count}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -469,7 +480,7 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           file_pattern: ${{ inputs.firmware_folder }}/**/*
-          commit_message: Update firmware files for branch ${{ steps.branch-name.outputs.branch }}
+          commit_message: Update firmware files for ${{ steps.output-path.outputs.repo }} ${{ steps.output-path.outputs.branch }}
           commit_options: --no-verify
           push_options: --no-verify
 
@@ -477,5 +488,5 @@ jobs:
         if: steps.firmware-files.outputs.has_files == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ steps.branch-name.outputs.safe_branch }}
-          path: ${{ inputs.firmware_folder }}/${{ steps.branch-name.outputs.safe_branch }}/*
+          name: firmware-${{ steps.output-path.outputs.safe_repo }}-${{ steps.output-path.outputs.safe_branch }}
+          path: ${{ steps.output-path.outputs.firmware_dir }}/*
