@@ -75,6 +75,10 @@ permissions:
   contents: write
   actions: read
 
+concurrency:
+  group: zmk-firmware-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   matrix:
     runs-on: ubuntu-latest
@@ -511,6 +515,14 @@ jobs:
     steps:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
+
+      - name: 🔄 Sync caller branch after firmware publish
+        if: ${{ startsWith(github.ref, 'refs/heads/') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$GITHUB_REF_NAME"
+          git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
 
       - name: 🧰 Checkout ZMK workspace tools
         uses: actions/checkout@v4

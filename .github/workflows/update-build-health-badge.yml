@@ -51,6 +51,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-health-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -62,6 +66,14 @@ jobs:
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v4
+
+      - name: Sync caller branch
+        if: ${{ startsWith(github.ref, 'refs/heads/') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "$GITHUB_REF_NAME"
+          git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
 
       - name: Checkout badge tools
         uses: actions/checkout@v4
