@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760">
+  <style>
+    text { font-family: Arial, "Noto Sans JP", sans-serif; fill: #17212b; }
+    .title { font-size: 30px; font-weight: 700; }
+    .heading { font-size: 20px; font-weight: 700; }
+    .label { font-size: 16px; }
+    .small { font-size: 14px; }
+    .mono { font-family: Consolas, monospace; font-size: 15px; }
+    .box { fill: #ffffff; stroke: #52606d; stroke-width: 2; rx: 6; }
+    .cmd { fill: #f6c85f; stroke: #8a6510; stroke-width: 2; }
+    .data { fill: #7bc8a4; stroke: #226f54; stroke-width: 2; }
+    .discard { fill: #e8edf2; stroke: #75808a; stroke-width: 2; }
+    .wire { fill: none; stroke: #334e68; stroke-width: 3; }
+    .note { fill: #fff7dc; stroke: #a97800; stroke-width: 2; rx: 6; }
+  </style>
+
+  <rect width="1200" height="760" fill="#f4f7f9"/>
+  <text x="50" y="55" class="title">ADS1220IRVAR: RDATA読み出しの正しい実装</text>
+
+  <text x="50" y="105" class="heading">1. SPIフレーム（CSは4バイト間Lowを維持）</text>
+  <text x="50" y="145" class="label">MOSI</text>
+  <rect x="140" y="120" width="210" height="48" class="cmd"/>
+  <rect x="350" y="120" width="210" height="48" class="discard"/>
+  <rect x="560" y="120" width="210" height="48" class="discard"/>
+  <rect x="770" y="120" width="210" height="48" class="discard"/>
+  <text x="245" y="150" text-anchor="middle" class="mono">RDATA (0x10)</text>
+  <text x="455" y="150" text-anchor="middle" class="mono">0x00</text>
+  <text x="665" y="150" text-anchor="middle" class="mono">0x00</text>
+  <text x="875" y="150" text-anchor="middle" class="mono">0x00</text>
+
+  <text x="50" y="215" class="label">MISO</text>
+  <rect x="140" y="190" width="210" height="48" class="discard"/>
+  <rect x="350" y="190" width="210" height="48" class="data"/>
+  <rect x="560" y="190" width="210" height="48" class="data"/>
+  <rect x="770" y="190" width="210" height="48" class="data"/>
+  <text x="245" y="220" text-anchor="middle" class="mono">破棄: rx[0]</text>
+  <text x="455" y="220" text-anchor="middle" class="mono">MSB: rx[1]</text>
+  <text x="665" y="220" text-anchor="middle" class="mono">MID: rx[2]</text>
+  <text x="875" y="220" text-anchor="middle" class="mono">LSB: rx[3]</text>
+  <path d="M140 260 H980" class="wire"/>
+  <path d="M140 250 V270 M980 250 V270" class="wire"/>
+  <text x="560" y="290" text-anchor="middle" class="small">32 SCLK: コマンド8bit + 変換結果24bit</text>
+
+  <text x="50" y="345" class="heading">2. Zephyrドライバ実装</text>
+  <rect x="50" y="370" width="700" height="315" class="box"/>
+  <text x="75" y="405" class="mono">static int ads1220_read_sample(...)</text>
+  <text x="75" y="435" class="mono">{</text>
+  <text x="100" y="465" class="mono">uint8_t tx[4] = { ADS1220_RDATA_CMD, 0, 0, 0 };</text>
+  <text x="100" y="495" class="mono">uint8_t rx[4] = { 0 };</text>
+  <text x="100" y="535" class="mono">int ret = ads1220_transceive(dev, tx, sizeof(tx),</text>
+  <text x="445" y="565" class="mono">rx, sizeof(rx));</text>
+  <text x="100" y="600" class="mono">if (ret != 0) return ret;</text>
+  <text x="100" y="635" class="mono">*buffer = (int32_t)sys_get_be24(&amp;rx[1]);</text>
+  <text x="100" y="665" class="mono">if (*buffer &amp; 0x00800000) *buffer |= 0xFF000000;</text>
+  <text x="75" y="695" class="mono">}</text>
+
+  <text x="790" y="345" class="heading">3. LPPS入力</text>
+  <rect x="790" y="370" width="360" height="190" class="box"/>
+  <text x="815" y="410" class="label">channel 0</text>
+  <text x="815" y="440" class="mono">AIN0 - AIN1</text>
+  <text x="815" y="485" class="label">channel 1</text>
+  <text x="815" y="515" class="mono">AIN2 - AIN3</text>
+
+  <rect x="790" y="585" width="360" height="100" class="note"/>
+  <text x="815" y="620" class="label">注意</text>
+  <text x="815" y="650" class="small">各差動ペアを基板上で直結すると、</text>
+  <text x="815" y="674" class="small">測定値は原理上ほぼゼロになります。</text>
+
+  <text x="50" y="735" class="small">ADS1220IRVARでもSPIプロトコルはADS1220共通です。</text>
+</svg>

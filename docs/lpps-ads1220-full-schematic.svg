@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120">
+  <style>
+    text { font-family: Arial, "Noto Sans JP", sans-serif; fill: #151f2b; }
+    .title { font-size: 30px; font-weight: 700; }
+    .head { font-size: 20px; font-weight: 700; }
+    .label { font-size: 15px; }
+    .small { font-size: 13px; }
+    .mono { font-family: Consolas, monospace; font-size: 14px; }
+    .part { fill: #fff; stroke: #35495e; stroke-width: 2; }
+    .adc { fill: #eaf3fb; stroke: #246493; stroke-width: 3; }
+    .sensor { fill: #eaf7ef; stroke: #287a50; stroke-width: 3; }
+    .conn { fill: #fff6d8; stroke: #9a7000; stroke-width: 2; }
+    .note { fill: #fff; stroke: #8996a3; stroke-width: 2; rx: 6; }
+    .warn { fill: #ffe7e7; stroke: #b42318; stroke-width: 2; rx: 6; }
+    .wire { fill: none; stroke: #263746; stroke-width: 3; }
+    .power { fill: none; stroke: #b45f06; stroke-width: 4; }
+    .gnd { fill: none; stroke: #111; stroke-width: 4; }
+    .xnet { fill: none; stroke: #1976a3; stroke-width: 4; }
+    .ynet { fill: none; stroke: #d1495b; stroke-width: 4; }
+    .vcm { fill: none; stroke: #7546a8; stroke-width: 4; }
+    .digital { fill: none; stroke: #3569c8; stroke-width: 3; }
+    .junction { stroke: none; }
+  </style>
+
+  <rect width="1600" height="1120" fill="#f5f7f9"/>
+  <text x="40" y="46" class="title">LPPS + ADS1220IRVAR 完全回路図（R7・R10未実装）</text>
+  <text x="40" y="73" class="small">LPPS内部: UP=3–2 / DOWN=4–1 / LEFT=5–2 / RIGHT=6–1。ADS1220は専用SPI、CS固定Low。</text>
+
+  <!-- Host connector -->
+  <rect x="40" y="115" width="210" height="310" class="conn"/>
+  <text x="65" y="150" class="head">J1 ホスト</text>
+  <text x="65" y="195" class="mono">1  GND</text>
+  <text x="65" y="235" class="mono">2  VCC (3.3V)</text>
+  <text x="65" y="275" class="mono">3  SCLK</text>
+  <text x="65" y="315" class="mono">4  DRDY</text>
+  <text x="65" y="355" class="mono">5  MISO</text>
+  <text x="65" y="395" class="mono">6  MOSI</text>
+
+  <!-- Series resistors -->
+  <rect x="315" y="255" width="90" height="26" class="part"/>
+  <text x="360" y="274" text-anchor="middle" class="mono">R3 47Ω</text>
+  <rect x="315" y="335" width="90" height="26" class="part"/>
+  <text x="360" y="354" text-anchor="middle" class="mono">R1 47Ω</text>
+  <rect x="315" y="375" width="90" height="26" class="part"/>
+  <text x="360" y="394" text-anchor="middle" class="mono">R2 47Ω</text>
+  <path d="M250 268 H315 M405 268 H535" class="digital"/>
+  <path d="M250 308 H535" class="digital"/>
+  <path d="M250 348 H315 M405 348 H535" class="digital"/>
+  <path d="M250 388 H315 M405 388 H535" class="digital"/>
+  <text x="420" y="250" class="small">SCLK</text>
+  <text x="420" y="330" class="small">DOUT/MISO</text>
+  <text x="420" y="370" class="small">DIN/MOSI</text>
+
+  <!-- ADC -->
+  <rect x="535" y="115" width="390" height="600" class="adc"/>
+  <text x="650" y="155" class="head">U1 ADS1220IRVAR</text>
+  <text x="555" y="205" class="mono">12 DRDY</text>
+  <text x="555" y="270" class="mono">15 SCLK</text>
+  <text x="555" y="350" class="mono">13 DOUT/DRDY</text>
+  <text x="555" y="390" class="mono">14 DIN</text>
+  <text x="555" y="430" class="mono">16 CS → GND</text>
+  <text x="555" y="485" class="mono">11 DVDD → VCC</text>
+  <text x="555" y="525" class="mono">2  DGND → GND</text>
+  <text x="555" y="565" class="mono">1  CLK → GND</text>
+  <text x="555" y="620" class="mono">10 AVDD → VCC</text>
+  <text x="555" y="660" class="mono">3  AVSS → GND</text>
+
+  <text x="780" y="205" class="mono">9 AIN0 ← Y_SIG</text>
+  <text x="780" y="255" class="mono">8 AIN1 ← VCM</text>
+  <text x="780" y="325" class="mono">5 AIN2 ← VCM (R9=0Ω)</text>
+  <text x="780" y="375" class="mono">4 AIN3 ← X_SIG (R10=DNP)</text>
+  <text x="780" y="455" class="mono">7 REFP0</text>
+  <text x="780" y="505" class="mono">6 REFN0</text>
+  <text x="660" y="700" class="small">IDAC1 = 250µA, I1MUX = REFP0</text>
+
+  <!-- power and grounding -->
+  <path d="M250 228 H470 V485 H535 M470 485 V620 H535" class="power"/>
+  <text x="420" y="215" class="mono">VCC</text>
+  <path d="M250 188 H455 V525 H535 M455 525 V565 H535 M455 565 V660 H535 M455 430 H535" class="gnd"/>
+  <text x="420" y="180" class="mono">GND</text>
+
+  <!-- decoupling -->
+  <rect x="955" y="565" width="100" height="28" class="part"/>
+  <text x="1005" y="585" text-anchor="middle" class="mono">C1 100n</text>
+  <rect x="955" y="610" width="100" height="28" class="part"/>
+  <text x="1005" y="630" text-anchor="middle" class="mono">C2 100n</text>
+  <rect x="1080" y="565" width="100" height="28" class="part"/>
+  <text x="1130" y="585" text-anchor="middle" class="mono">C3 1µF</text>
+  <path d="M925 485 H1005 V565 M925 620 H955" class="power"/>
+  <path d="M1055 579 H1210 V680 M1055 624 H1210 M1180 579 H1210" class="gnd"/>
+  <text x="955" y="545" class="small">DVDD/AVDDごとに100nF、近傍に1µF</text>
+
+  <!-- Sensor connector -->
+  <rect x="40" y="500" width="255" height="355" class="conn"/>
+  <text x="65" y="535" class="head">J6 LPPS</text>
+  <text x="65" y="580" class="mono">1  LPPS_COMMON_N</text>
+  <text x="65" y="625" class="mono">2  LPPS_COMMON_P</text>
+  <text x="65" y="670" class="mono">3  GAUGE_TOP_END</text>
+  <text x="65" y="715" class="mono">4  GAUGE_BOTTOM_END</text>
+  <text x="65" y="760" class="mono">5  GAUGE_LEFT_END</text>
+  <text x="65" y="805" class="mono">6  GAUGE_RIGHT_END</text>
+
+  <!-- LPPS equivalent -->
+  <rect x="340" y="760" width="585" height="300" class="sensor"/>
+  <text x="365" y="795" class="head">LPPS内部等価回路</text>
+  <path d="M390 850 H455" class="power"/>
+  <text x="365" y="855" class="mono">pin2</text>
+  <rect x="455" y="835" width="115" height="28" class="part"/>
+  <text x="512" y="855" text-anchor="middle" class="mono">R_TOP</text>
+  <path d="M570 849 H650" class="ynet"/>
+  <rect x="455" y="895" width="115" height="28" class="part"/>
+  <text x="512" y="915" text-anchor="middle" class="mono">R_LEFT</text>
+  <path d="M390 909 H455 M570 909 H650" class="xnet"/>
+
+  <path d="M390 970 H455" class="gnd"/>
+  <text x="365" y="975" class="mono">pin1</text>
+  <rect x="455" y="955" width="115" height="28" class="part"/>
+  <text x="512" y="975" text-anchor="middle" class="mono">R_BOTTOM</text>
+  <path d="M570 969 H650" class="ynet"/>
+  <rect x="700" y="955" width="115" height="28" class="part"/>
+  <text x="757" y="975" text-anchor="middle" class="mono">R_RIGHT</text>
+  <path d="M650 909 H815" class="xnet"/>
+  <path d="M815 909 V969" class="xnet"/>
+  <path d="M815 969 H840" class="gnd"/>
+  <text x="590" y="833" class="small">pin3</text>
+  <text x="590" y="948" class="small">pin4</text>
+  <text x="665" y="895" class="small">pin5</text>
+  <text x="825" y="948" class="small">pin6</text>
+
+  <!-- Sensor branch joining -->
+  <path d="M295 615 H315 V735 H970 V455 H925" class="power"/>
+  <text x="305" y="605" class="small">pin2 → REFP0</text>
+  <path d="M295 570 H325 V745 H985 V505 H925" class="gnd"/>
+  <text x="305" y="560" class="small">pin1 → REFN0</text>
+  <path d="M295 660 H310 V705 H325 M295 705 H325 V205 H925" class="ynet"/>
+  <circle cx="325" cy="705" r="6" fill="#d1495b" class="junction"/>
+  <text x="335" y="690" class="mono">Y_SIG = pin3 + pin4</text>
+  <path d="M295 750 H320 V795 H335 M295 795 H335 V375 H925" class="xnet"/>
+  <circle cx="335" cy="795" r="6" fill="#1976a3" class="junction"/>
+  <text x="345" y="780" class="mono">X_SIG = pin5 + pin6</text>
+
+  <!-- Reference divider -->
+  <rect x="1050" y="135" width="500" height="350" class="note"/>
+  <text x="1075" y="170" class="head">励起・基準分圧</text>
+  <text x="1075" y="200" class="small">ADS1220 IDAC1からREFP0へ250µAを供給</text>
+  <path d="M1110 240 V285" class="power"/>
+  <text x="1130" y="250" class="mono">REFP0</text>
+  <rect x="1095" y="285" width="120" height="30" class="part"/>
+  <text x="1155" y="306" text-anchor="middle" class="mono">R5 2.4k</text>
+  <path d="M1110 315 V350 H1320" class="vcm"/>
+  <circle cx="1110" cy="350" r="6" fill="#7546a8" class="junction"/>
+  <text x="1130" y="345" class="mono">VCM</text>
+  <rect x="1095" y="375" width="120" height="30" class="part"/>
+  <text x="1155" y="396" text-anchor="middle" class="mono">R6 2.4k</text>
+  <path d="M1110 350 V375 M1110 405 V445" class="gnd"/>
+  <text x="1130" y="440" class="mono">REFN0 → GND</text>
+  <path d="M1320 350 V255 H925 M1320 350 V325 H925" class="vcm"/>
+  <text x="1330" y="325" class="small">VCM → R8 → AIN1 / R9 → AIN2</text>
+  <text x="1075" y="470" class="small">R7・R10: DNP（未実装） / R8・R9: 0Ω実装</text>
+
+  <!-- ADC configuration note -->
+  <rect x="1050" y="735" width="500" height="225" class="note"/>
+  <text x="1075" y="770" class="head">ファームウェア設定</text>
+  <text x="1075" y="810" class="mono">channel 0: AIN0 − AIN1 = Y_SIG − VCM</text>
+  <text x="1075" y="850" class="mono">channel 1: AIN2 − AIN3 = VCM − X_SIG（X反転）</text>
+  <text x="1075" y="890" class="mono">reference: ADC_REF_EXTERNAL0 (両ch)</text>
+  <text x="1075" y="930" class="mono">IDAC1: 250µA → REFP0</text>
+
+  <rect x="40" y="1070" width="1510" height="38" class="warn"/>
+  <text x="60" y="1095" class="label">実装指定: R7/R10=DNP、R8/R9=0Ω。AIN0=Y_SIG、AIN1=VCM、AIN2=VCM、AIN3=X_SIG。差動ペアを直結しない。</text>
+</svg>

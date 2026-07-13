@@ -3,6 +3,8 @@
 .direnv
 .codex-remote-attachments
 .tmp-*
+/.tmp/
+/tmp-build-lpps.sh
 __pycache__
 .west
 .west-workspace

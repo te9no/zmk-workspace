@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+  <style>
+    text { font-family: Arial, "Noto Sans JP", sans-serif; fill: #17212b; }
+    .title { font-size: 29px; font-weight: 700; }
+    .head { font-size: 21px; font-weight: 700; }
+    .label { font-size: 16px; }
+    .small { font-size: 14px; }
+    .mono { font-family: Consolas, monospace; font-size: 16px; }
+    .panel { fill: #fff; stroke: #52606d; stroke-width: 2; rx: 7; }
+    .sensor { fill: #eaf7ef; stroke: #287a50; stroke-width: 3; rx: 7; }
+    .adc { fill: #eaf2fb; stroke: #28659b; stroke-width: 3; rx: 7; }
+    .note { fill: #fff5d6; stroke: #9a7000; stroke-width: 2; rx: 7; }
+    .bad { fill: #ffe8e8; stroke: #b42318; stroke-width: 2; rx: 7; }
+    .res { fill: #fff; stroke: #334e68; stroke-width: 2; }
+    .refp { fill: none; stroke: #a05a00; stroke-width: 4; }
+    .refn { fill: none; stroke: #333; stroke-width: 4; }
+    .x { fill: none; stroke: #1976a3; stroke-width: 4; }
+    .y { fill: none; stroke: #d1495b; stroke-width: 4; }
+    .vcm { fill: none; stroke: #7a4db3; stroke-width: 4; }
+  </style>
+
+  <rect width="1400" height="900" fill="#f4f7f9"/>
+  <text x="45" y="50" class="title">LPPS内部構造に基づく ADS1220IRVAR 物理配線</text>
+  <text x="45" y="78" class="small">写真から確認した内部接続: 2–3、2–5、1–4、1–6の4抵抗素子</text>
+
+  <rect x="40" y="110" width="425" height="620" class="sensor"/>
+  <text x="65" y="150" class="head">LPPSセンサー内部</text>
+  <text x="65" y="180" class="small">端子1/2が共通端、端子3〜6が各素子の端</text>
+
+  <circle cx="120" cy="260" r="23" fill="#fff" stroke="#287a50" stroke-width="2"/>
+  <text x="120" y="266" text-anchor="middle" class="mono">2</text>
+  <circle cx="120" cy="555" r="23" fill="#fff" stroke="#287a50" stroke-width="2"/>
+  <text x="120" y="561" text-anchor="middle" class="mono">1</text>
+
+  <rect x="205" y="225" width="110" height="26" class="res"/>
+  <text x="260" y="215" text-anchor="middle" class="small">上側ゲージ</text>
+  <path d="M143 260 H175 V238 H205 M315 238 H380" class="y"/>
+  <circle cx="402" cy="238" r="22" fill="#fff" stroke="#d1495b" stroke-width="2"/>
+  <text x="402" y="244" text-anchor="middle" class="mono">3</text>
+
+  <rect x="205" y="315" width="110" height="26" class="res"/>
+  <text x="260" y="305" text-anchor="middle" class="small">左側ゲージ</text>
+  <path d="M143 260 H175 V328 H205 M315 328 H380" class="x"/>
+  <circle cx="402" cy="328" r="22" fill="#fff" stroke="#1976a3" stroke-width="2"/>
+  <text x="402" y="334" text-anchor="middle" class="mono">5</text>
+
+  <rect x="205" y="470" width="110" height="26" class="res"/>
+  <text x="260" y="460" text-anchor="middle" class="small">下側ゲージ</text>
+  <path d="M143 555 H175 V483 H205 M315 483 H380" class="y"/>
+  <circle cx="402" cy="483" r="22" fill="#fff" stroke="#d1495b" stroke-width="2"/>
+  <text x="402" y="489" text-anchor="middle" class="mono">4</text>
+
+  <rect x="205" y="560" width="110" height="26" class="res"/>
+  <text x="260" y="620" text-anchor="middle" class="small">右側ゲージ</text>
+  <path d="M143 555 H175 V573 H205 M315 573 H380" class="x"/>
+  <circle cx="402" cy="573" r="22" fill="#fff" stroke="#1976a3" stroke-width="2"/>
+  <text x="402" y="579" text-anchor="middle" class="mono">6</text>
+
+  <text x="65" y="680" class="mono">2 → REFP</text>
+  <text x="260" y="680" class="mono">1 → REFN</text>
+
+  <rect x="505" y="110" width="390" height="620" class="panel"/>
+  <text x="530" y="150" class="head">外部で作る2つの信号中点</text>
+
+  <text x="530" y="205" class="label">Y軸: 上側と下側を直列化</text>
+  <path d="M555 245 H615" class="refp"/>
+  <rect x="615" y="232" width="100" height="26" class="res"/>
+  <path d="M715 245 H775" class="y"/>
+  <circle cx="790" cy="245" r="8" fill="#d1495b"/>
+  <path d="M798 245 H845" class="y"/>
+  <rect x="615" y="292" width="100" height="26" class="res"/>
+  <path d="M715 305 H790 V245" class="y"/>
+  <path d="M555 305 H615" class="refn"/>
+  <text x="545" y="250" class="mono">REFP</text>
+  <text x="545" y="310" class="mono">REFN</text>
+  <text x="620" y="225" class="small">2–3 上</text>
+  <text x="620" y="342" class="small">1–4 下</text>
+  <text x="745" y="225" class="mono">Y_SIG = 3+4</text>
+
+  <text x="530" y="405" class="label">X軸: 左側と右側を直列化</text>
+  <path d="M555 445 H615" class="refp"/>
+  <rect x="615" y="432" width="100" height="26" class="res"/>
+  <path d="M715 445 H775" class="x"/>
+  <circle cx="790" cy="445" r="8" fill="#1976a3"/>
+  <path d="M798 445 H845" class="x"/>
+  <rect x="615" y="492" width="100" height="26" class="res"/>
+  <path d="M715 505 H790 V445" class="x"/>
+  <path d="M555 505 H615" class="refn"/>
+  <text x="545" y="450" class="mono">REFP</text>
+  <text x="545" y="510" class="mono">REFN</text>
+  <text x="620" y="425" class="small">2–5 左</text>
+  <text x="620" y="542" class="small">1–6 右</text>
+  <text x="745" y="425" class="mono">X_SIG = 5+6</text>
+
+  <text x="530" y="605" class="label">固定基準中点</text>
+  <text x="530" y="635" class="mono">REFP—R5(2.4k)—VCM—R6(2.4k)—REFN</text>
+  <text x="530" y="670" class="small">VCMは無荷重時の約1/2励起電圧</text>
+
+  <rect x="935" y="110" width="420" height="620" class="adc"/>
+  <text x="960" y="150" class="head">ADS1220への接続</text>
+  <text x="965" y="220" class="mono">AIN0 ← Y_SIG (端子3+4)</text>
+  <text x="965" y="275" class="mono">AIN1 ← VCM</text>
+  <path d="M965 300 H1325" class="y"/>
+  <text x="965" y="335" class="label">channel 0 = AIN0 − AIN1</text>
+
+  <text x="965" y="415" class="mono">AIN2 ← X_SIG (端子5+6)</text>
+  <text x="965" y="470" class="mono">AIN3 ← VCM</text>
+  <path d="M965 495 H1325" class="x"/>
+  <text x="965" y="530" class="label">channel 1 = AIN2 − AIN3</text>
+
+  <text x="965" y="600" class="mono">REFP0 → センサー端子2</text>
+  <text x="965" y="645" class="mono">REFN0 → センサー端子1</text>
+  <text x="965" y="690" class="small">X/Yの符号が逆ならソフトでinvert</text>
+
+  <rect x="40" y="765" width="1315" height="95" class="bad"/>
+  <text x="65" y="800" class="head">重要: 0Ωジャンパの正解</text>
+  <text x="65" y="830" class="label">センサー端子3–4、および5–6は各信号中点として接続する。一方、Y_SIG/X_SIGをVCMへ0Ω接続してはいけない。</text>
+  <text x="65" y="852" class="small">VCMへ短絡すると荷重による電圧変化が消える。ADS1220のAIN1/AIN3だけをVCMへ接続する。</text>
+
+  <text x="45" y="890" class="small">この図は写真の導通関係を基にした等価回路。抵抗値と方向名は実測で最終確認する。</text>
+</svg>

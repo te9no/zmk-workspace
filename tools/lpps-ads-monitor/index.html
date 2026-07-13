@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LPPS ADS Monitor</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">XIAO / ADS1220</p>
+          <h1>LPPS ADS Monitor</h1>
+        </div>
+        <div class="toolbar">
+          <span id="status" class="status" data-state="idle"><span></span>未接続</span>
+          <button id="demoButton" class="button secondary" type="button">デモ</button>
+          <button id="connectButton" class="button primary" type="button">接続</button>
+        </div>
+      </header>
+
+      <main>
+        <section class="metrics" aria-label="Current readings">
+          <article class="metric channel-x">
+            <div class="metric-heading"><span>CH0 / AIN0-AIN1 G16</span><strong id="ch0Value">0</strong></div>
+            <div class="meter"><span id="ch0Meter"></span><i></i></div>
+            <div class="metric-foot"><span id="ch0Raw">RAW --</span><span id="ch0Noise">σ 0.0</span></div>
+          </article>
+          <article class="metric channel-y">
+            <div class="metric-heading"><span>CH1 / AIN2-AIN3 G16</span><strong id="ch1Value">0</strong></div>
+            <div class="meter"><span id="ch1Meter"></span><i></i></div>
+            <div class="metric-foot"><span id="ch1Raw">RAW --</span><span id="ch1Noise">σ 0.0</span></div>
+          </article>
+          <article class="metric channel-z">
+            <div class="metric-heading"><span>CH2 / VREF</span><strong id="ch2Value">--</strong></div>
+            <div class="meter"><span id="ch2Meter"></span><i></i></div>
+            <div class="metric-foot"><span id="ch2Raw">RAW --</span><span id="ch2Noise">σ --</span></div>
+          </article>
+          <article class="metric channel-w">
+            <div class="metric-heading"><span>CH3 / AVDD</span><strong id="ch3Value">--</strong></div>
+            <div class="meter"><span id="ch3Meter"></span><i></i></div>
+            <div class="metric-foot"><span id="ch3Raw">RAW --</span><span id="ch3Noise">σ --</span></div>
+          </article>
+          <article class="metric neutral">
+            <div class="metric-heading"><span>サンプル</span><strong id="sampleCount">0</strong></div>
+            <div class="sample-meta"><span id="sampleRate">0.0 Hz</span><span id="droppedLines">破棄 0</span></div>
+            <div class="metric-foot"><span id="rawMode">delta</span><span id="elapsed">00:00</span></div>
+          </article>
+        </section>
+
+        <section class="workspace">
+          <div class="plot-panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">TIME SERIES</p><h2>ADC差分</h2></div>
+              <div class="legend"><span class="ch0">CH0</span><span class="ch1">CH1</span><span class="ch2">CH2</span><span class="ch3">CH3</span></div>
+            </div>
+            <canvas id="chart" aria-label="ADS channel time series"></canvas>
+          </div>
+
+          <aside class="xy-panel">
+            <div class="panel-heading"><div><p class="eyebrow">POSITION</p><h2>XY</h2></div></div>
+            <canvas id="xyPad" aria-label="LPPS XY position"></canvas>
+            <div class="xy-values"><span id="xyX">X 0</span><span id="xyY">Y 0</span></div>
+          </aside>
+        </section>
+
+        <section class="control-band">
+          <div class="control-group">
+            <label for="rangeInput">表示範囲 <output id="rangeValue">500</output></label>
+            <input id="rangeInput" type="range" min="50" max="200000" value="500" step="50" />
+          </div>
+          <div class="control-group">
+            <label for="windowInput">時間窓 <output id="windowValue">15秒</output></label>
+            <input id="windowInput" type="range" min="5" max="60" value="15" step="5" />
+          </div>
+          <div class="commands">
+            <button id="centerButton" class="icon-command" type="button" title="現在値を中心に設定">中心</button>
+            <button id="clearButton" class="icon-command" type="button" title="表示データを消去">消去</button>
+            <button id="exportButton" class="icon-command" type="button" title="CSVとして保存">CSV</button>
+          </div>
+        </section>
+
+        <details class="log-panel">
+          <summary>受信ログ <span id="lastLine">待機中</span></summary>
+          <pre id="serialLog"></pre>
+        </details>
+      </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
