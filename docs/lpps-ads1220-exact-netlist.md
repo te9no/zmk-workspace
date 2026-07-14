@@ -1,7 +1,9 @@
 # LPPS + ADS1220IRVAR exact schematic
 
-This document is the electrical source of truth for the LPPS module using the
+This document is the electrical source of truth for the LPPS ADC PCB using the
 ADS1220IRVAR (RVA, 16-pin VQFN). It describes the R7/R10 DNP assembly option.
+The PCB netlist is known; the bare SK8707-01 sensor bridge mapping remains a
+working hypothesis until verified by resistance measurements.
 
 ## Parts
 
@@ -48,7 +50,11 @@ ADS1220IRVAR (RVA, 16-pin VQFN). It describes the R7/R10 DNP assembly option.
 R7 and R10 are physically present as footprints only. Because they are DNP,
 `Y_SIG` and `X_SIG` are not electrically connected to `VCM`.
 
-## LPPS internal connections
+## LPPS internal connections (working hypothesis)
+
+The following mapping comes from the traced internal diagram supplied for this
+sensor. It is not documented in the public SK8707-01 data sheet, and badjeff has
+confirmed that he does not know how the SK8707-01 sensor board is routed.
 
 | Element | LPPS terminals |
 |---|---|
@@ -59,6 +65,25 @@ R7 and R10 are physically present as footprints only. Because they are DNP,
 
 The PCB joins J6.3 and J6.4 as `Y_SIG`, and joins J6.5 and J6.6 as
 `X_SIG`. J6.1 and J6.2 must not be joined.
+
+### Required unpowered resistance check
+
+Disconnect the sensor from the ADC board and measure in resistance mode. If the
+traced bridge is correct, exactly these groups should be finite:
+
+| Probe pair | Expected result | Interpretation |
+|---|---|---|
+| 2-3 | finite | UP gauge |
+| 2-5 | finite | LEFT gauge |
+| 3-5 | finite, approximately sum of 2-3 and 2-5 | series path via pin 2 |
+| 1-4 | finite | DOWN gauge |
+| 1-6 | finite | RIGHT gauge |
+| 4-6 | finite, approximately sum of 1-4 and 1-6 | series path via pin 1 |
+
+All pairs crossing the `{2,3,5}` and `{1,4,6}` groups should read open before
+J6.3+J6.4 and J6.5+J6.6 are externally joined. Do not apply the T440-derived
+firmware profile unless this matrix matches. A continuity beeper is insufficient;
+record actual resistance values and use a range capable of measuring the gauges.
 
 ## ADS1220 measurements
 
@@ -111,13 +136,13 @@ The reference configuration in
 | Excitation low | REFN0 and AVSS |
 | Measurement midpoint | AIN2 through equal 2.4 kohm resistors to REFP0 and REFN0 |
 
-The LPPS sensor has six wires because each axis midpoint is exposed as two
-terminals. Joining J6.3+J6.4 and J6.5+J6.6 reduces it to the same four electrical
-roles: two outputs plus excitation high and low. R8/R9 create the midpoint used
-as the negative ADC input. R7/R10 must remain DNP or the sensor outputs are
-shorted to that midpoint.
+Under the traced LPPS hypothesis, the sensor has six wires because each axis
+midpoint is exposed as two terminals. Joining J6.3+J6.4 and J6.5+J6.6 reduces it
+to the same four electrical roles: two outputs plus excitation high and low.
+R8/R9 create the midpoint used as the negative ADC input. R7/R10 must remain DNP
+or the sensor outputs are shorted to that midpoint.
 
-The normal firmware therefore reads:
+If the resistance matrix above matches, the normal firmware reads:
 
 | Firmware channel | MUX | Axis |
 |---|---|---|
