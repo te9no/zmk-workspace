@@ -97,3 +97,65 @@ AVDD minus 0.9 V.
 | EP | Thermal pad | Leave open or connect only to AVSS/GND |
 
 The host SPI controller must use mode 1 (`CPOL=0`, `CPHA=1`).
+
+## Relationship to badjeff's working configuration
+
+The reference configuration in
+`samukun__ads1220_tpoint_idac.dtsi` converts a four-wire T440 bridge as follows:
+
+| T440 role | ADS1220 connection |
+|---|---|
+| X output | AIN0 |
+| Y output | AIN1 |
+| Excitation high | REFP0, driven by IDAC1 |
+| Excitation low | REFN0 and AVSS |
+| Measurement midpoint | AIN2 through equal 2.4 kohm resistors to REFP0 and REFN0 |
+
+The LPPS sensor has six wires because each axis midpoint is exposed as two
+terminals. Joining J6.3+J6.4 and J6.5+J6.6 reduces it to the same four electrical
+roles: two outputs plus excitation high and low. R8/R9 create the midpoint used
+as the negative ADC input. R7/R10 must remain DNP or the sensor outputs are
+shorted to that midpoint.
+
+The normal firmware therefore reads:
+
+| Firmware channel | MUX | Axis |
+|---|---|---|
+| CH0 | AIN3 - AIN2 | X (`X_SIG - VCM`) |
+| CH1 | AIN0 - AIN1 | Y (`Y_SIG - VCM`) |
+| CH2 | AIN0 - AVSS | Y common-mode monitor only |
+| CH3 | AIN3 - AVSS | X common-mode monitor only |
+
+CH0 and CH1 use external reference 0, gain 64, 330 SPS, and a 250 uA IDAC on
+REFP0 to match the reference implementation. Do not fit R7 or R10.
+
+## Why the earlier firmware could not validate this circuit
+
+The imported driver placed the external-reference selection into CONFIG2 bits
+5:4 instead of bits 7:6. Consequently, `ADC_REF_EXTERNAL0` still measured with
+the internal reference. It also set CONFIG1 bit 2 while calling the mode
+single-shot; that bit actually selects continuous conversion. Finally, it sent
+POWERDOWN before every channel setup and did not support PGA bypass for
+AINx-to-AVSS diagnostics. The diagnostic branch corrects these register and
+conversion-sequencing errors.
+
+## Diagnostic firmware
+
+`MKB_L_MODULE_LPPS_SCAN` is deliberately separate from the pointer firmware.
+It keeps the IDAC at 10 uA, uses gain 1 and the internal reference, and emits all
+15 ADS1220 MUX results every 500 ms as two lines:
+
+```text
+ADSSCAN0,time,mux0,mux1,mux2,mux3,mux4,mux5,mux6,mux7
+ADSSCAN1,time,mux8,mux9,mux10,mux11,mux12,mux13,mux14
+```
+
+MUX order is the ADS1220 data-sheet order: AIN0-AIN1, AIN0-AIN2,
+AIN0-AIN3, AIN1-AIN2, AIN1-AIN3, AIN2-AIN3, AIN1-AIN0,
+AIN3-AIN2, AIN0-AVSS, AIN1-AVSS, AIN2-AVSS, AIN3-AVSS,
+REFP0-REFN0, AVDD/4-AVSS, and internal short.
+
+Before using the normal 250 uA firmware, run the scan firmware and confirm that
+MUX12 does not sit near positive full scale. If REFP0-REFN0 is still around 3 V
+on a 3.3 V supply, the IDAC compliance limit is violated and the bridge path is
+open or too resistive; do not tune gain or deadzone until that is fixed.
