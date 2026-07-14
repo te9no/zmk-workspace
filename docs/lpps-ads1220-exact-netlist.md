@@ -3,7 +3,8 @@
 This document is the electrical source of truth for the LPPS ADC PCB using the
 ADS1220IRVAR (RVA, 16-pin VQFN). It describes the R7/R10 DNP assembly option.
 The PCB netlist is known; the bare SK8707-01 sensor bridge mapping remains a
-working hypothesis until verified by resistance measurements.
+working hypothesis until verified by resistance measurements or the topology
+scan described below.
 
 ## Parts
 
@@ -18,8 +19,8 @@ working hypothesis until verified by resistance measurements.
 | R5 | 2.4 kohm, REFP0-to-VCM | Fit |
 | R6 | 2.4 kohm, VCM-to-REFN0 | Fit |
 | R7 | 0 ohm, AIN0-to-VCM option | DNP |
-| R8 | 0 ohm, AIN1-to-VCM | Fit |
-| R9 | 0 ohm, AIN2-to-VCM | Fit |
+| R8 | 0 ohm, AIN1-to-VCM | Fit for the current normal-firmware hypothesis; DNP for topology discovery |
+| R9 | 0 ohm, AIN2-to-VCM | Fit for the current normal-firmware hypothesis; DNP for topology discovery |
 | R10 | 0 ohm, AIN3-to-VCM option | DNP |
 | R11 | 0 ohm, REFN0-to-GND | Fit |
 | C1 | 100 nF, DVDD bypass | Fit close to U1 pins 11/2 |
@@ -55,6 +56,8 @@ R7 and R10 are physically present as footprints only. Because they are DNP,
 The following mapping comes from the traced internal diagram supplied for this
 sensor. It is not documented in the public SK8707-01 data sheet, and badjeff has
 confirmed that he does not know how the SK8707-01 sensor board is routed.
+The public SK8707-01 PDF describes the controller-equipped PS/2 module pinout
+only; it does not document the raw six-wire strain-gauge sensor pinout.
 
 | Element | LPPS terminals |
 |---|---|
@@ -95,7 +98,7 @@ record actual resistance values and use a range capable of measuring the gauges.
 The X result has reversed polarity. Apply X inversion in firmware; do not fix
 the polarity by shorting or rearranging the differential inputs.
 
-Use external reference 0 (`REFP0`/`REFN0`). Route IDAC1 at 250 uA to REFP0.
+Use external reference 0 (`REFP0`/`REFN0`). Route IDAC1 at 100 uA to REFP0.
 The IDAC compliance requirement must be met: REFP0 must remain no higher than
 AVDD minus 0.9 V.
 
@@ -151,8 +154,18 @@ If the resistance matrix above matches, the normal firmware reads:
 | CH2 | AIN0 - AVSS | Y common-mode monitor only |
 | CH3 | AIN3 - AVSS | X common-mode monitor only |
 
-CH0 and CH1 use external reference 0, gain 64, 330 SPS, and a 250 uA IDAC on
-REFP0 to match the reference implementation. Do not fit R7 or R10.
+CH0 and CH1 use external reference 0, PGA bypass, gain 4, 330 SPS, and a 100 uA
+IDAC on REFP0. The lower bypassed gain is intentional: the connected sensor was
+measured near AVSS and therefore does not satisfy the ADS1220 PGA common-mode
+requirements at gain 64. Do not fit R7 or R10.
+
+On the first successful 10 uA scan after reconnecting the sensor, MUX12 measured
+approximately 123,000 counts with the 2.048 V internal reference. MUX12 is the
+ADS1220's divided-by-four reference monitor, so this represents approximately
+120 mV across REFP0-REFN0 and an excitation-path resistance near 12 kohm. MUX13
+indicated AVDD approximately 3.29 V. A 250 uA IDAC would require about 3.0 V and
+violate the IDAC compliance limit; 100 uA is used instead and should produce
+about 1.2 V.
 
 ## Why the earlier firmware could not validate this circuit
 
@@ -167,8 +180,9 @@ conversion-sequencing errors.
 ## Diagnostic firmware
 
 `MKB_L_MODULE_LPPS_SCAN` is deliberately separate from the pointer firmware.
-It keeps the IDAC at 10 uA, uses gain 1 and the internal reference, and emits all
-15 ADS1220 MUX results every 500 ms as two lines:
+It keeps the IDAC at 100 uA and uses the internal reference. Differential MUX0
+through MUX7 use gain 4 at 20 SPS; monitor MUX8 through MUX14 use gain 1 at
+20 SPS. It emits all 15 ADS1220 MUX results as two lines:
 
 ```text
 ADSSCAN0,time,mux0,mux1,mux2,mux3,mux4,mux5,mux6,mux7
@@ -180,7 +194,36 @@ AIN0-AIN3, AIN1-AIN2, AIN1-AIN3, AIN2-AIN3, AIN1-AIN0,
 AIN3-AIN2, AIN0-AVSS, AIN1-AVSS, AIN2-AVSS, AIN3-AVSS,
 REFP0-REFN0, AVDD/4-AVSS, and internal short.
 
-Before using the normal 250 uA firmware, run the scan firmware and confirm that
-MUX12 does not sit near positive full scale. If REFP0-REFN0 is still around 3 V
-on a 3.3 V supply, the IDAC compliance limit is violated and the bridge path is
-open or too resistive; do not tune gain or deadzone until that is fixed.
+Before using the normal 100 uA firmware, run the scan firmware and multiply the
+MUX12 voltage result by four to recover REFP0-REFN0. Confirm that this excitation
+voltage remains below AVDD minus 0.9 V. Do not tune gain or deadzone until the
+IDAC compliance requirement is met.
+
+### Topology discovery mode
+
+`MKB_L_MODULE_LPPS_TOPOLOGY` is a faster variant of the same all-MUX scan. Use it
+only after temporarily removing R8 and R9. With R8/R9 fitted, LPPS connector pins
+4 and 5 are hard-clamped to VCM through zero-ohm links, so the ADC cannot tell
+whether those sensor terminals are true bridge midpoints or part of another
+gauge pair. That is why the previous scans showed AIN1 and AIN2 sitting at the
+same VCM level regardless of stick motion.
+
+The topology test state should be:
+
+| Item | State |
+|---|---|
+| R7 | DNP |
+| R8 | DNP temporarily |
+| R9 | DNP temporarily |
+| R10 | DNP |
+| R11 | Fit |
+| J6.1 | REFN0 |
+| J6.2 | REFP0 |
+| J6.3 | AIN0 |
+| J6.4 | AIN1 |
+| J6.5 | AIN2 |
+| J6.6 | AIN3 |
+
+In this state, press neutral/up/down/left/right while recording ADSSCAN0/1. The
+responsive differential pairs identify the actual half-bridge terminals. Only
+after those pairs are known should R8/R9 or any external shorts be reintroduced.
