@@ -236,7 +236,7 @@ jobs:
         shell: bash
         env:
           BOARD: ${{ matrix.board }}
-          SHIELD: ${{ matrix.shield }}
+          BUILD_SHIELD: ${{ matrix.shield }}
           SNIPPET: ${{ matrix.snippet }}
           ARTIFACT_NAME: ${{ matrix['artifact-name'] }}
         run: |
@@ -255,17 +255,17 @@ jobs:
 
           artifact_name="${ARTIFACT_NAME:-}"
           if [ -z "$artifact_name" ]; then
-            artifact_name="${SHIELD:+${SHIELD}-}${BOARD}-zmk"
+            artifact_name="${BUILD_SHIELD:+${BUILD_SHIELD}-}${BOARD}-zmk"
           fi
           artifact_name="$(printf '%s' "$artifact_name" | sed 's/[":<>|*?\\\/]/-/g')"
-          display_name="${SHIELD:+${SHIELD} - }${BOARD}"
+          display_name="${BUILD_SHIELD:+${BUILD_SHIELD} - }${BOARD}"
 
           echo "base_dir=${base_dir}" >> "$GITHUB_ENV"
           echo "zmk_load_arg=${zmk_load_arg}" >> "$GITHUB_ENV"
           echo "artifact_name=${artifact_name}" >> "$GITHUB_ENV"
           echo "display_name=${display_name}" >> "$GITHUB_ENV"
           echo "🎛️ Board: ${BOARD}"
-          echo "🛡️ Shield: ${SHIELD:-none}"
+          echo "🛡️ Shield: ${BUILD_SHIELD:-none}"
           echo "🧩 Snippet: ${SNIPPET:-none}"
           echo "📦 Artifact: ${artifact_name}"
 
@@ -328,7 +328,7 @@ jobs:
         shell: bash
         env:
           BOARD: ${{ matrix.board }}
-          SHIELD: ${{ matrix.shield }}
+          BUILD_SHIELD: ${{ matrix.shield }}
           SNIPPET: ${{ matrix.snippet }}
           CMAKE_ARGS: ${{ matrix['cmake-args'] }}
           CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -344,8 +344,8 @@ jobs:
           fi
 
           shield_args=()
-          if [ -n "${SHIELD:-}" ]; then
-            shield_args=(-DSHIELD="$SHIELD")
+          if [ -n "${BUILD_SHIELD:-}" ]; then
+            shield_args=(-DSHIELD="$BUILD_SHIELD")
           fi
 
           zmk_load_args=()
@@ -355,7 +355,7 @@ jobs:
 
           echo "🚀 Starting ZMK build"
           echo "🎛️ BOARD=$BOARD"
-          echo "🛡️ SHIELD=${SHIELD:-none}"
+          echo "🛡️ SHIELD=${BUILD_SHIELD:-none}"
           echo "🧩 SNIPPET=${SNIPPET:-none}"
           echo "🧱 CMAKE_ARGS=${CMAKE_ARGS:-none}"
 
