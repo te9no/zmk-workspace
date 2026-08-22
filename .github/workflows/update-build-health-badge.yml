@@ -1,4 +1,4 @@
-name: Update build health badge
+name: Generate build health badge artifact
 
 on:
   workflow_call:
@@ -18,10 +18,10 @@ on:
         required: false
         default: "badges/build-health"
       commit_badge:
-        description: "Commit generated badge files back to the caller branch."
+        description: "Deprecated compatibility input. Badge files are never committed."
         type: boolean
         required: false
-        default: true
+        default: false
       tool_repository:
         description: "Repository that contains .github/scripts/write-build-health-badge.py."
         type: string
@@ -49,7 +49,7 @@ on:
         value: ${{ jobs.update.outputs.endpoint_json }}
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: build-health-${{ github.repository }}-${{ github.ref }}
@@ -58,7 +58,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    name: Update build health badge
+    name: Generate build health badge artifact
     outputs:
       badge_dir: ${{ steps.write.outputs.badge_dir }}
       badge_svg: ${{ steps.write.outputs.badge_svg }}
@@ -66,14 +66,6 @@ jobs:
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@v4
-
-      - name: Sync caller branch
-        if: ${{ startsWith(github.ref, 'refs/heads/') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin "$GITHUB_REF_NAME"
-          git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
 
       - name: Checkout badge tools
         uses: actions/checkout@v4
@@ -109,15 +101,6 @@ jobs:
             --folder "$BADGE_FOLDER" \
             --github-output "$GITHUB_OUTPUT" \
             --github-summary "$GITHUB_STEP_SUMMARY"
-
-      - name: Commit badge files
-        if: inputs.commit_badge == true
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          file_pattern: ${{ inputs.badge_folder }}/**/*
-          commit_message: Update build health badge
-          commit_options: --no-verify
-          push_options: --no-verify
 
       - name: Upload badge artifact
         uses: actions/upload-artifact@v4
