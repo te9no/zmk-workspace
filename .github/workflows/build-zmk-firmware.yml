@@ -24,7 +24,7 @@ on:
         required: false
         default: "firmware"
       update_build_health:
-        description: "Write build health badge files back to the caller branch."
+        description: "Generate build health badge files as a workflow artifact and job summary."
         type: boolean
         required: false
         default: false
@@ -561,14 +561,6 @@ jobs:
             --folder "$BADGE_FOLDER" \
             --github-output "$GITHUB_OUTPUT" \
             --github-summary "$GITHUB_STEP_SUMMARY"
-
-      - name: 💾 Commit build health badge
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          file_pattern: ${{ inputs.badge_folder }}/**/*
-          commit_message: Update build health badge
-          commit_options: --no-verify
-          push_options: --no-verify
 
       - name: 🎁 Upload build health badge
         uses: actions/upload-artifact@v4
