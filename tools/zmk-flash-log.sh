@@ -37,6 +37,7 @@ usage() {
     cat >&2 <<'USAGE'
 Usage:
   tools/zmk-flash-log.sh <artifact-or-uf2> <trigger COM port> [options]
+  tools/zmk-flash-log.sh --resolve <artifact-or-uf2>
   tools/zmk-flash-log.sh --diagnose [trigger COM port] [options]
 
 Examples:
@@ -50,8 +51,8 @@ Options:
   --baud <n>              Serial log baud rate. Default: 115200.
   --log-port <COM port>   Read serial logs from a different COM port.
   --drive <letter>        Restrict UF2 drive detection to a drive letter.
-  --log <path>            Output log path. Default: logs/zmk/<artifact>-timestamp.log.
-  --log-dir <path>        Output log directory when --log is omitted. Default: logs/zmk.
+  --log <path>            Output log path. Default: <profile-logs>/zmk/<artifact>-timestamp.log.
+  --log-dir <path>        Output log directory when --log is omitted. Default: <profile-logs>/zmk.
   --blocked-ports "..."   Refuse to use these ports. Default: ZMK_FLASH_BLOCKED_PORTS or empty.
   --bootloader-baud <n>   Baud used to trigger bootloader. Default: 1200.
   --bootloader-delay-ms <n>
@@ -62,50 +63,17 @@ Options:
   --skip-flash            Only capture log.
   --skip-log              Only flash firmware.
   --diagnose              Print Windows-side diagnostics and exit.
+  --resolve               Print the exact UF2 path; do not build, flash, or open serial ports.
+                          Uses just.sh profile selection (including ZMK_WORK_PROFILE).
 USAGE
 }
 
-active_config_root() {
-    local west_top west_config path file west_yml_path
-
-    if [[ -f "$repo_dir/.west-workspace/.west/config" ]]; then
-        west_top="$repo_dir/.west-workspace"
-        west_config="$west_top/.west/config"
-    elif [[ -f "$repo_dir/.west/config" ]]; then
-        west_top="$repo_dir"
-        west_config="$repo_dir/.west/config"
-    else
-        return 1
-    fi
-
-    path="$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")"
-    file="$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")"
-    west_yml_path="$west_top/${path:-.}/${file}"
-    realpath -m "$(dirname "$west_yml_path")/.."
-}
-
-safe_git_branch() {
-    local config_root="$1"
-    local branch
-
-    if git -C "$config_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        branch="$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$config_root" rev-parse --short HEAD)"
-    else
-        branch="nogit"
-    fi
-
-    printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g'
-}
-
 active_firmware_dir() {
-    local config_root config_name branch
-    config_root="$(active_config_root)"
-    config_name="$(basename "$config_root")"
-    branch="$(safe_git_branch "$config_root")"
-    printf '%s\n' "$repo_dir/firmware/$config_name/$branch"
+    bash "$repo_dir/just.sh" firmware-dir
 }
 
 diagnose=false
+resolve_only=false
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
@@ -114,9 +82,13 @@ fi
 if [[ "${1:-}" == "--diagnose" ]]; then
     diagnose=true
     shift
+elif [[ "${1:-}" == "--resolve" ]]; then
+    resolve_only=true
+    shift
 fi
 
-if [[ "$diagnose" == "false" && $# -lt 2 ]]; then
+if [[ "$diagnose" == false && "$resolve_only" == false && $# -lt 2 ]] ||
+   [[ "$resolve_only" == true && $# -lt 1 ]]; then
     usage
     exit 2
 fi
@@ -130,6 +102,9 @@ if [[ "$diagnose" == "true" ]]; then
         port="${1:-}"
         [[ $# -gt 0 ]] && shift
     fi
+elif [[ "$resolve_only" == true ]]; then
+    target="$1"
+    shift
 else
     target="$1"
     port="$2"
@@ -142,7 +117,7 @@ baud=115200
 log_port="$port"
 drive=""
 log_path=""
-log_dir="$repo_dir/logs/zmk"
+log_dir=""
 skip_flash=false
 skip_log=false
 post_flash_delay_ms=200
@@ -220,6 +195,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$resolve_only" == true && "$do_build" == true ]]; then
+    echo "--resolve cannot be combined with --build." >&2
+    exit 2
+fi
+
 normalize_com_port() {
     printf '%s\n' "${1^^}"
 }
@@ -247,25 +227,22 @@ else
         "$repo_dir/just.sh" build "$artifact"
     fi
     firmware_dir="$(active_firmware_dir)"
-    uf2_path="$firmware_dir/${artifact}.uf2"
-    if [[ ! -f "$uf2_path" ]]; then
-        mapfile -t matches < <(find "$repo_dir/firmware" -type f -name "${artifact}.uf2" | sort)
-        if [[ "${#matches[@]}" -eq 1 ]]; then
-            uf2_path="${matches[0]}"
-        elif [[ "${#matches[@]}" -gt 1 ]]; then
-            echo "Multiple UF2 files matched artifact '$artifact'. Specify the UF2 path explicitly:" >&2
-            printf '  %s\n' "${matches[@]}" >&2
-            exit 1
-        fi
-    fi
+    uf2_path="$firmware_dir/${artifact//\//-}.uf2"
 fi
 
 if [[ "$diagnose" == "false" && ! -f "$uf2_path" ]]; then
     echo "UF2 not found: $uf2_path" >&2
+    echo "Build it in the selected profile, or specify an explicit UF2 path. Other branches are not searched." >&2
     exit 1
 fi
 
+if [[ "$resolve_only" == true ]]; then
+    printf '%s\n' "$uf2_path"
+    exit 0
+fi
+
 if [[ -z "$log_path" ]]; then
+    [[ -n "$log_dir" ]] || log_dir="$(bash "$repo_dir/just.sh" log-dir)/zmk"
     mkdir -p "$log_dir"
     log_path="$log_dir/${artifact}-$(date +%Y%m%d-%H%M%S).log"
 fi

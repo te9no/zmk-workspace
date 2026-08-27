@@ -38,7 +38,11 @@ repository or worktree under `.fleet-workspace/`.
 ./just.sh paths
 ```
 
-The selected profile remains active. Use `./just.sh --profile <name> <command>` for a one-off command, and `./just.sh profiles` to list profiles. During `init`, the wrapper records the config repository name (from its `origin` remote) and branch in the profile metadata. Firmware therefore keeps the canonical `firmware/<repository>/<branch>/` path even if the config worktree is moved later. `ZMK_CONFIG_NAME` and `ZMK_CONFIG_BRANCH` override the saved metadata when an explicit destination is needed; non-Git configs fall back to the profile name instead of `nogit`. Existing root-level build directories can be reviewed with `./just.sh organize --dry-run` and moved into a timestamped archive with `./just.sh organize --apply`; no data is deleted.
+The selected profile remains active. Use `./just.sh --profile <name> <command>` for a one-off command, and `./just.sh profiles` to list profiles. Firmware destinations use this priority: explicit `ZMK_CONFIG_NAME` / `ZMK_CONFIG_BRANCH`, the current checkout's repository name (from `origin`) and branch, last-known profile metadata, then the profile name. Switching branches therefore changes the destination without another `init`. Detached checkouts use `detached-<12-character SHA>`. Metadata is recorded during `init` and is only a fallback when the checkout cannot be inspected; update the profile's west config with `init` after moving a checkout before building again. Path queries do not rewrite metadata.
+
+`./just.sh firmware-dir` and `./just.sh log-dir` print the resolved directories without starting Docker. The CDC helper uses the same resolver; `./just.sh --profile <name> flash-log --resolve <artifact>` verifies the UF2 path without building or accessing a device. It never automatically selects a matching artifact from another branch. Default CDC logs go under the selected profile's `logs/zmk/` directory.
+
+Existing root-level build directories can be reviewed with `./just.sh organize --dry-run` and moved into a timestamped archive with `./just.sh organize --apply`; no data is deleted. For WSL-owned linked worktrees, use WSL/Linux Git for worktree repair and other writes: mixing Windows UNC back-pointers with Linux paths can make a healthy worktree appear prunable. Check the real host filesystem (including paths outside a container mount) before treating a pointer as missing.
 
 Incremental builds reuse the existing Ninja build tree and only run CMake when one of its dependencies changes. To build several matching targets as quickly as possible, use the auto-tuned parallel recipe:
 
@@ -251,7 +255,11 @@ USB CDC ACM の 1200 baud bootloader trigger が入ったファームウェア�
 ./just.sh paths
 ```
 
-一度だけ別プロファイルを使う場合は `./just.sh --profile <名前> <コマンド>`、一覧は `./just.sh profiles` を使用します。`init` 時にはconfigリポジトリの`origin`名とブランチをプロファイルのmetadataへ保存するため、worktreeを移動してもfirmwareの保存先は正規の `firmware/<repository>/<branch>/` のままです。保存先を明示する場合は `ZMK_CONFIG_NAME` / `ZMK_CONFIG_BRANCH` がmetadataより優先され、Git管理外のconfigでは`nogit`ではなくプロファイル名を使用します。現在ルート直下にある旧 `.build-*` / `.west-workspace-*` は、`./just.sh organize --dry-run` で移動内容を確認し、`./just.sh organize --apply` で `.zmk-workspace/archive/<日時>/` へ退避できます。この操作ではファイルを削除しません。
+一度だけ別プロファイルを使う場合は `./just.sh --profile <名前> <コマンド>`、一覧は `./just.sh profiles` を使用します。保存先は `ZMK_CONFIG_NAME` / `ZMK_CONFIG_BRANCH` の明示指定 → 現在のcheckoutの`origin`名・ブランチ → `init`時のmetadata → プロファイル名の順で決まります。ブランチを切り替えた場合は再`init`せず新しいブランチの保存先を使い、detached HEADでは`detached-<12桁SHA>`を使います。metadataはcheckoutを読めない場合の代替情報であり、パス確認だけでは書き換えません。worktreeを移動した場合はビルド前に`init`でwestの参照先も更新してください。
+
+`./just.sh firmware-dir` / `./just.sh log-dir` はDockerを起動せず保存先を表示します。CDC補助も同じ処理を使い、`./just.sh --profile <名前> flash-log --resolve <artifact>` で実機に触れずUF2のパスを確認できます。他ブランチの同名UF2は自動選択しません。CDCログの既定保存先は選択中プロファイルの`logs/zmk/`です。
+
+現在ルート直下にある旧 `.build-*` / `.west-workspace-*` は、`./just.sh organize --dry-run` で移動内容を確認し、`./just.sh organize --apply` で `.zmk-workspace/archive/<日時>/` へ退避できます。この操作ではファイルを削除しません。WSL上のlinked worktreeへのGit書き込み・参照修復はWSL/Linux Gitで行い、WindowsのUNC形式とLinux形式の混在を避けてください。コンテナのマウント範囲外にあるだけのworktreeを、削除済みと誤判定しないよう注意してください。
 
 ビルド結果の UF2 ファイルは config とブランチごとに分けて、`firmware/<config-folder>/<branch>/` に出力されます。たとえば `config/zmk-config-SparAkashaAnanta` の `feat/add-iqs-module-and-led-support` ブランチを使っている場合は、`firmware/zmk-config-SparAkashaAnanta/feat-add-iqs-module-and-led-support/` に生成されます。
 

@@ -70,33 +70,63 @@ config_branch_overridden=false
 sanitize_firmware_component() {
     local value="$1"
     value="$(printf '%s' "$value" | sed 's/[[:space:]":<>|*?\\\/]/-/g; s/^-*//; s/-*$//')"
-    [[ -n "$value" ]] || value="$profile"
+    [[ -n "$value" && "$value" != . && "$value" != .. ]] || value="$profile"
     printf '%s\n' "$value"
 }
 
 load_profile_metadata() {
-    local value
+    local config_root git_root remote_url revision config_name="" config_branch=""
 
-    if [[ -z "${ZMK_CONFIG_NAME:-}" && -f "$profile_metadata_dir/config-name" ]]; then
-        value="$(<"$profile_metadata_dir/config-name")"
-        ZMK_CONFIG_NAME="$(sanitize_firmware_component "$value")"
-        export ZMK_CONFIG_NAME
+    config_root="$(config_root_from_west || true)"
+    git_root="$(git -C "${config_root:-/nonexistent}" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$config_root" && -n "$git_root" && "$(realpath -m "$git_root")" == "$(realpath -m "$config_root")" ]]; then
+        remote_url="$(git -C "$config_root" remote get-url origin 2>/dev/null || true)"
+        config_name="$(basename "${remote_url%/}")"
+        config_name="${config_name%.git}"
+        [[ -n "$config_name" ]] || config_name="$(basename "$config_root")"
+        config_branch="$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+        if [[ -z "$config_branch" ]]; then
+            revision="$(git -C "$config_root" rev-parse --short=12 HEAD 2>/dev/null || true)"
+            config_branch="${revision:+detached-$revision}"
+        fi
     fi
-    if [[ -z "${ZMK_CONFIG_BRANCH:-}" && -f "$profile_metadata_dir/config-branch" ]]; then
-        value="$(<"$profile_metadata_dir/config-branch")"
-        ZMK_CONFIG_BRANCH="$(sanitize_firmware_component "$value")"
-        export ZMK_CONFIG_BRANCH
+
+    # Metadata is a last-known fallback, not a branch pin after checkout switches.
+    if [[ -z "$config_name" && -f "$profile_metadata_dir/config-name" ]]; then
+        config_name="$(<"$profile_metadata_dir/config-name")"
     fi
+    if [[ -z "$config_branch" && -f "$profile_metadata_dir/config-branch" ]]; then
+        config_branch="$(<"$profile_metadata_dir/config-branch")"
+    fi
+    ZMK_CONFIG_NAME="$(sanitize_firmware_component "${ZMK_CONFIG_NAME:-${config_name:-$profile}}")"
+    ZMK_CONFIG_BRANCH="$(sanitize_firmware_component "${ZMK_CONFIG_BRANCH:-${config_branch:-$profile}}")"
+    export ZMK_CONFIG_NAME ZMK_CONFIG_BRANCH
 }
 
 config_root_from_west() {
     local west_config="$host_west_workspace/.west/config"
-    local path file west_yml_path
+    local west_top="$host_west_workspace" path file west_yml_path
 
-    [[ -f "$west_config" ]] || return 1
+    if [[ -n "${ZMK_CONFIG_ROOT:-}" ]]; then
+        workspace_path_to_host "$ZMK_CONFIG_ROOT"
+        return
+    fi
+    if [[ ! -f "$west_config" && "$profile" == default ]]; then
+        if [[ -f "$repo_dir/.west/config" ]]; then
+            west_top="$repo_dir"
+        elif [[ -f "$repo_dir/.west-workspace/.west/config" ]]; then
+            west_top="$repo_dir/.west-workspace"
+        fi
+        west_config="$west_top/.west/config"
+    fi
+    if [[ ! -f "$west_config" ]]; then
+        [[ -f "$profile_metadata_dir/config-root" ]] || return 1
+        workspace_path_to_host "$(<"$profile_metadata_dir/config-root")"
+        return
+    fi
     path="$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")"
     file="$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")"
-    west_yml_path="$host_west_workspace/${path:-.}/${file}"
+    west_yml_path="$west_top/${path:-.}/${file:-west.yml}"
     realpath -m "$(dirname "$west_yml_path")/.."
 }
 
@@ -114,7 +144,9 @@ save_profile_metadata() {
             config_name="$(basename "$config_root")"
         fi
         config_branch="$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-        [[ -n "$config_branch" ]] || config_branch="$profile"
+        if [[ -z "$config_branch" ]]; then
+            config_branch="detached-$(git -C "$config_root" rev-parse --short=12 HEAD)"
+        fi
     else
         config_name="$profile"
         config_branch="$profile"
@@ -135,6 +167,8 @@ Workspace storage commands:
   ./just.sh profiles                    List stored profiles
   ./just.sh --profile <name> <command>  Use a profile for one command
   ./just.sh paths                       Show directories used by the profile
+  ./just.sh firmware-dir                Print only the current firmware directory
+  ./just.sh log-dir                     Print only the current log directory
   ./just.sh organize --dry-run          Preview legacy directory archival
   ./just.sh organize --apply            Archive legacy directories without deleting them
 
@@ -301,50 +335,17 @@ EOF
 fi
 
 firmware_dir() {
-    local west_top west_config path file west_yml_path config_root git_root remote_url config_name config_branch
-
-    config_name="${ZMK_CONFIG_NAME:-}"
-    config_branch="${ZMK_CONFIG_BRANCH:-}"
-
-    if [[ -n "$config_name" && -n "$config_branch" ]]; then
-        config_name="$(sanitize_firmware_component "$config_name")"
-        config_branch="$(sanitize_firmware_component "$config_branch")"
-        printf '%s\n' "$repo_dir/firmware/$config_name/$config_branch"
-        return
-    elif [[ -f "$host_west_workspace/.west/config" ]]; then
-        west_top="$host_west_workspace"
-        west_config="$west_top/.west/config"
-    elif [[ -f "$repo_dir/.west/config" ]]; then
-        west_top="$repo_dir"
-        west_config="$repo_dir/.west/config"
-    else
-        printf '%s\n' "$repo_dir/firmware/$profile/$profile"
-        return
-    fi
-
-    path="$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")"
-    file="$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")"
-    west_yml_path="$west_top/${path:-.}/${file}"
-    config_root="$(dirname "$west_yml_path")/.."
-    config_root="$(realpath -m "$config_root")"
-    git_root="$(git -C "$config_root" rev-parse --show-toplevel 2>/dev/null || true)"
-    if [[ -n "$git_root" && "$(realpath -m "$git_root")" == "$config_root" ]]; then
-        if [[ -z "$config_name" ]]; then
-            remote_url="$(git -C "$config_root" remote get-url origin 2>/dev/null || true)"
-            config_name="$(basename "${remote_url:-$config_root}")"
-            config_name="${config_name%.git}"
-        fi
-        if [[ -z "$config_branch" ]]; then
-            config_branch="$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-        fi
-    else
-        config_name="${config_name:-$profile}"
-        config_branch="${config_branch:-$profile}"
-    fi
-    config_name="$(sanitize_firmware_component "${config_name:-$profile}")"
-    config_branch="$(sanitize_firmware_component "${config_branch:-$profile}")"
-    printf '%s\n' "$repo_dir/firmware/$config_name/$config_branch"
+    printf '%s\n' "$repo_dir/firmware/$ZMK_CONFIG_NAME/$ZMK_CONFIG_BRANCH"
 }
+
+if [[ "${1:-}" == "firmware-dir" ]]; then
+    firmware_dir
+    exit 0
+fi
+if [[ "${1:-}" == "log-dir" ]]; then
+    printf '%s\n' "$host_log_root"
+    exit 0
+fi
 
 if [[ "${1:-}" == "paths" ]]; then
     cat <<EOF

@@ -14,7 +14,7 @@ The goal is to make the following cycle repeatable from Codex or a terminal:
 
 - `tools/zmk-flash-log.sh`
   - Reusable WSL entry point.
-  - Resolves artifacts from the active `just init` config.
+  - Resolves artifacts through `just.sh firmware-dir` for the selected profile.
   - Copies the PowerShell helper and UF2 into a Windows temp directory.
   - Calls `powershell.exe` so Windows can access COM ports and UF2 drives.
 - `tools/zmk-flash-log.ps1`
@@ -73,7 +73,7 @@ tools/zmk-flash-log.sh --diagnose COM12
 When the first argument is an artifact name, the helper resolves it from the active workspace config:
 
 ```text
-firmware/<config-folder>/<safe-branch>/<artifact>.uf2
+firmware/<repository>/<safe-branch>/<artifact>.uf2
 ```
 
 For example:
@@ -82,7 +82,16 @@ For example:
 firmware/zmk-config-example/main/MY_KEYBOARD_RIGHT.uf2
 ```
 
-If the current branch path does not contain the artifact, the helper searches `firmware/` for a unique matching file. If multiple files match, specify the UF2 path explicitly.
+The helper shares `just.sh` profile selection and destination rules: explicit name/branch overrides, current checkout identity, saved metadata, then profile name. Repository names come from `origin`, not the temporary checkout folder. If the current branch path does not contain the artifact, the command fails; it never selects another branch's matching UF2 automatically. Build the current target or specify an explicit UF2 path.
+
+Check the exact path without building, flashing, opening a serial port, or creating log directories:
+
+```sh
+./just.sh --profile my-keyboard firmware-dir
+./just.sh --profile my-keyboard flash-log --resolve MY_KEYBOARD_RIGHT
+```
+
+Direct helper calls also honor `ZMK_WORK_PROFILE`. `--resolve` cannot be combined with `--build`. Default CDC logs use `$(./just.sh log-dir)/zmk/`; `--log` and `--log-dir` remain explicit overrides.
 
 ## Diagnostics
 

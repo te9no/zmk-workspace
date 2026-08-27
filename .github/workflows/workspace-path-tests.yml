@@ -1,0 +1,29 @@
+name: Workspace path tests
+
+on:
+  push:
+    paths:
+      - just.sh
+      - tools/zmk-flash-log.sh
+      - tests/**
+      - .github/workflows/workspace-path-tests.yml
+  pull_request:
+    paths:
+      - just.sh
+      - tools/zmk-flash-log.sh
+      - tests/**
+      - .github/workflows/workspace-path-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: bash -n just.sh tools/zmk-flash-log.sh
+      - name: Verify profile and CDC artifact resolution without hardware
+        run: python3 -m unittest discover -s tests -v
