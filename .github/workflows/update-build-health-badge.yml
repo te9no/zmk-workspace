@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       status:
-        description: "Build result. Usually `${{ needs.build.result }}` or `${{ job.status }}`."
+        description: "Build result supplied by the caller, usually from needs.build.result or job.status."
         type: string
         required: true
       target:
