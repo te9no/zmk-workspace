@@ -180,13 +180,23 @@ function Invoke-BootloaderTrigger {
     $serial.WriteTimeout = 500
     $serial.DtrEnable = $true
     $serial.RtsEnable = $true
-    $serial.Open()
-    Start-Sleep -Milliseconds $DelayMs
-    $serial.DtrEnable = $false
-    $serial.RtsEnable = $false
-    Start-Sleep -Milliseconds $DelayMs
-    $serial.Close()
-    $serial.Dispose()
+    try {
+        try {
+            $serial.Open()
+            Start-Sleep -Milliseconds $DelayMs
+            $serial.DtrEnable = $false
+            $serial.RtsEnable = $false
+            Start-Sleep -Milliseconds $DelayMs
+        } catch [System.IO.IOException] {
+            # Immediate DTE-rate callbacks can reset the device during Open().
+            Write-Host "Trigger port disconnected while opening; waiting for UF2 drive."
+        }
+    } finally {
+        if ($serial.IsOpen) {
+            $serial.Close()
+        }
+        $serial.Dispose()
+    }
 }
 
 function Wait-Uf2Drive {
