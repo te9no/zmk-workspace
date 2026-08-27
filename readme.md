@@ -12,7 +12,7 @@ Difference from urob's zmk-config:
 - Physical layout SVG preview support
 - Tab completion for `just build` and `just flash` with fzf
 - `just flash` is added for UF2 loader (Only works on Winodws(WSL) or macOS with Nix)
-- Keeps west-managed source checkouts under `.west-workspace/`
+- Groups west checkouts, build trees, and logs under `.zmk-workspace/profiles/`
 
 ## Usage
 
@@ -21,9 +21,32 @@ Difference from urob's zmk-config:
 > [!important]
 > On Windows, it is recommended that the workspace be located on WSL-native location (outside of `/mnt/c/`). Syncing the directory between Windows and WSL / container will result in significantly slower builds.
 
-On WSL, you can edit files directly in the WSL workspace and run `./just.sh init`, `./just.sh update`, `./just.sh list`, `./just.sh build`, `./just.sh test`, and `./just.sh flash` from WSL. Build-related commands execute `just` and the ZMK toolchain inside Docker using `.devcontainer/Dockerfile`, while generated files remain owned by your WSL user. West-managed source checkouts are placed under `.west-workspace/` instead of the repository root. Firmware files are written to `firmware/<config-folder>/<branch>/`. Flashing stays on the WSL host so it can call PowerShell and access the UF2 drive.
+On WSL, you can edit files directly in the WSL workspace and run `./just.sh init`, `./just.sh update`, `./just.sh list`, `./just.sh build`, `./just.sh test`, and `./just.sh flash` from WSL. Build-related commands execute `just` and the ZMK toolchain inside Docker using `.devcontainer/Dockerfile`, while generated files remain owned by your WSL user. Build trees, west checkouts, and logs are grouped under `.zmk-workspace/profiles/<profile>/`. Firmware files are written to `firmware/<config-folder>/<branch>/`. Flashing stays on the WSL host so it can call PowerShell and access the UF2 drive.
 
-Builds use `ccache` inside the container. The cache is stored at `.cache/ccache` on the WSL filesystem and is ignored by Git. You can inspect it with `./just.sh ccache-stats` and clear it with `./just.sh clean-ccache`. The default cache limit is 5 GiB; override it with `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all`.
+Builds use `ccache` inside the container. The shared cache is stored at `.zmk-workspace/cache/ccache` on the WSL filesystem and is ignored by Git. You can inspect it with `./just.sh ccache-stats` and clear it with `./just.sh clean-ccache`. The default cache limit is 5 GiB; override it with `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all`.
+
+Use profiles to isolate experiments without creating `.build-*` and `.west-workspace-*` directories in the repository root:
+
+```sh
+./just.sh profile polaris-dya-v2
+./just.sh init config/zmk-config-GeaconPolaris
+./just.sh build all
+./just.sh paths
+```
+
+The selected profile remains active. Use `./just.sh --profile <name> <command>` for a one-off command, and `./just.sh profiles` to list profiles. During `init`, the wrapper records the config repository name (from its `origin` remote) and branch in the profile metadata. Firmware therefore keeps the canonical `firmware/<repository>/<branch>/` path even if the config worktree is moved later. `ZMK_CONFIG_NAME` and `ZMK_CONFIG_BRANCH` override the saved metadata when an explicit destination is needed; non-Git configs fall back to the profile name instead of `nogit`. Existing root-level build directories can be reviewed with `./just.sh organize --dry-run` and moved into a timestamped archive with `./just.sh organize --apply`; no data is deleted.
+
+Incremental builds reuse the existing Ninja build tree and only run CMake when one of its dependencies changes. To build several matching targets as quickly as possible, use the auto-tuned parallel recipe:
+
+```sh
+./just.sh build-fast all
+```
+
+It chooses target-level and compiler-level parallelism from the available CPU and memory. Override either level when benchmarking or on a constrained machine:
+
+```sh
+ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all
+```
 
 1. Clone this repo
 1. See [VSCode Docs](https://code.visualstudio.com/docs/devcontainers/containers) for Dev Conainer usage. Or, see [urob's zmk-config README](https://github.com/urob/zmk-config#local-build-environment) for Nix and direnv setup
@@ -211,11 +234,30 @@ USB CDC ACM の 1200 baud bootloader trigger が入ったファームウェア�
 
 詳細は `docs/zmk-flash-log-loop.md` にまとめています。
 
-`init` で取得される ZMK / Zephyr / modules などの west 管理ファイルは、リポジトリ直下ではなく `.west-workspace/` に作られます。作業用リポジトリの直下が west のクローンで散らからないようにするためです。
+`init` で取得される ZMK / Zephyr / modules、ビルドツリー、並列ビルドのログは、`.zmk-workspace/profiles/<プロファイル名>/` の下へまとめて作られます。実験ごとに `.build-*` や `.west-workspace-*` がリポジトリ直下へ増えない構成です。
+
+たとえば Polaris の DYA Studio V2 検証環境を分離する場合は、次のようにプロファイルを選択してから初期化します。選択したプロファイルは次回以降も維持されます。
+
+```sh
+./just.sh profile polaris-dya-v2
+./just.sh init config/zmk-config-GeaconPolaris
+./just.sh build all
+./just.sh paths
+```
+
+一度だけ別プロファイルを使う場合は `./just.sh --profile <名前> <コマンド>`、一覧は `./just.sh profiles` を使用します。`init` 時にはconfigリポジトリの`origin`名とブランチをプロファイルのmetadataへ保存するため、worktreeを移動してもfirmwareの保存先は正規の `firmware/<repository>/<branch>/` のままです。保存先を明示する場合は `ZMK_CONFIG_NAME` / `ZMK_CONFIG_BRANCH` がmetadataより優先され、Git管理外のconfigでは`nogit`ではなくプロファイル名を使用します。現在ルート直下にある旧 `.build-*` / `.west-workspace-*` は、`./just.sh organize --dry-run` で移動内容を確認し、`./just.sh organize --apply` で `.zmk-workspace/archive/<日時>/` へ退避できます。この操作ではファイルを削除しません。
 
 ビルド結果の UF2 ファイルは config とブランチごとに分けて、`firmware/<config-folder>/<branch>/` に出力されます。たとえば `config/zmk-config-SparAkashaAnanta` の `feat/add-iqs-module-and-led-support` ブランチを使っている場合は、`firmware/zmk-config-SparAkashaAnanta/feat-add-iqs-module-and-led-support/` に生成されます。
 
-ビルド時はコンテナ内で `ccache` を使います。キャッシュ本体は WSL 側の `.cache/ccache` に保存され、Git には含めません。状態を見るには `./just.sh ccache-stats`、キャッシュを消すには `./just.sh clean-ccache` を使います。既定の上限は 5 GiB で、必要なら `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all` のように増やせます。
+ビルド時はコンテナ内で `ccache` を使います。全プロファイルで共有するキャッシュは WSL 側の `.zmk-workspace/cache/ccache` に保存され、Git には含めません。状態を見るには `./just.sh ccache-stats`、キャッシュを消すには `./just.sh clean-ccache` を使います。既定の上限は 5 GiB で、必要なら `ZMK_WORKSPACE_CCACHE_MAXSIZE=10G ./just.sh build all` のように増やせます。
+
+通常の `./just.sh build <target>` は既存の Ninja ビルドツリーを再利用し、変更された依存関係だけを処理します。複数ターゲットをまとめて最速でビルドする場合は、CPU数とメモリ量から並列度を自動調整する次のコマンドを使えます。
+
+```sh
+./just.sh build-fast all
+```
+
+並列度を固定したい場合は、`ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all` のように指定します。
 
 `config/zmk-config-SparAkashaAnanta` は、この workspace とは別の Git リポジトリとして扱えます。VS Code で親 workspace と config リポジトリの両方を認識させたい場合は、`config/zmk-config-SparAkashaAnanta` フォルダ自体にも `.git` がある状態にして、VS Code の Source Control で複数リポジトリとして表示させます。
 

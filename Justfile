@@ -1,68 +1,93 @@
 default:
     @just --list --unsorted
 
-build := absolute_path('.build')
-west_workspace := absolute_path('.west-workspace')
+work_root := absolute_path(env_var_or_default('ZMK_WORK_ROOT', '.zmk-workspace'))
+work_profile := env_var_or_default('ZMK_WORK_PROFILE', 'default')
+profile_root := work_root / 'profiles' / work_profile
+build := absolute_path(env_var_or_default('ZMK_BUILD_ROOT', profile_root / 'build'))
+west_workspace := absolute_path(env_var_or_default('ZMK_WEST_WORKSPACE', profile_root / 'west'))
+log_root := absolute_path(env_var_or_default('ZMK_LOG_ROOT', profile_root / 'logs'))
 zmk_config_root := absolute_path(`
-  if [ -f .west-workspace/.west/config ]; then
-    west_top=".west-workspace"
+  if [ -n "${ZMK_CONFIG_ROOT:-}" ]; then
+    printf '%s\n' "$ZMK_CONFIG_ROOT"
+    exit 0
+  fi
+
+  west_workspace="${ZMK_WEST_WORKSPACE:-${ZMK_WORK_ROOT:-.zmk-workspace}/profiles/${ZMK_WORK_PROFILE:-default}/west}"
+  if [ -f "$west_workspace/.west/config" ]; then
+    west_top="$west_workspace"
     west_config="$west_top/.west/config"
   elif [ -f .west/config ]; then
     west_top="."
     west_config=".west/config"
   else
-    echo "."
+    printf '.\n'
     exit 0
   fi
 
-  if [ -n "${west_config:-}" ]; then
-    path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
-    file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-    west_yml_path="$west_top/${path:-.}/${file}"
-    echo "$(dirname $west_yml_path)/.."
-  fi
+  path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+  file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+  west_yml_path="$west_top/${path:-.}/${file}"
+  printf '%s/..\n' "$(dirname "$west_yml_path")"
 `)
 zmk_config_name := `
-  if [ -f .west-workspace/.west/config ]; then
-    west_top=".west-workspace"
-    west_config="$west_top/.west/config"
-  elif [ -f .west/config ]; then
-    west_top="."
-    west_config=".west/config"
-  else
-    echo "default"
+  if [ -n "${ZMK_CONFIG_NAME:-}" ]; then
+    printf '%s' "$ZMK_CONFIG_NAME" | tr '/' '-' | sed 's/[[:space:]":<>|*?\\]/-/g'
     exit 0
   fi
 
-  path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
-  file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-  west_yml_path="$west_top/${path:-.}/${file}"
-  basename "$(realpath -m "$(dirname "$west_yml_path")/..")"
+  if [ -n "${ZMK_CONFIG_ROOT:-}" ]; then
+    config_root="$ZMK_CONFIG_ROOT"
+  else
+    west_workspace="${ZMK_WEST_WORKSPACE:-${ZMK_WORK_ROOT:-.zmk-workspace}/profiles/${ZMK_WORK_PROFILE:-default}/west}"
+    west_config="$west_workspace/.west/config"
+    if [ ! -f "$west_config" ]; then
+      printf '%s\n' "${ZMK_WORK_PROFILE:-default}"
+      exit 0
+    fi
+    path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+    file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+    config_root="$(dirname "$west_workspace/${path:-.}/$file")/.."
+  fi
+  config_root="$(realpath -m "$config_root")"
+  git_root=$(git -C "$config_root" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$git_root" ] && [ "$(realpath -m "$git_root")" = "$config_root" ]; then
+    remote_url=$(git -C "$config_root" remote get-url origin 2>/dev/null || true)
+    basename "${remote_url:-$config_root}" | sed 's/\.git$//; s/[[:space:]":<>|*?\\\/]/-/g'
+  else
+    printf '%s\n' "${ZMK_WORK_PROFILE:-default}"
+  fi
 `
 zmk_config_branch := `
-  if [ -f .west-workspace/.west/config ]; then
-    west_top=".west-workspace"
-    west_config="$west_top/.west/config"
-  elif [ -f .west/config ]; then
-    west_top="."
-    west_config=".west/config"
-  else
-    echo "nogit"
+  if [ -n "${ZMK_CONFIG_BRANCH:-}" ]; then
+    printf '%s' "$ZMK_CONFIG_BRANCH" | tr '/' '-' | sed 's/[":<>|*?\\]/-/g'
     exit 0
   fi
 
-  path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
-  file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-  west_yml_path="$west_top/${path:-.}/${file}"
-  config_root="$(realpath -m "$(dirname "$west_yml_path")/..")"
-
-  if git -C "$config_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    branch=$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || git -C "$config_root" rev-parse --short HEAD)
+  if [ -n "${ZMK_CONFIG_ROOT:-}" ]; then
+    config_root="$ZMK_CONFIG_ROOT"
   else
-    branch="nogit"
+    west_workspace="${ZMK_WEST_WORKSPACE:-${ZMK_WORK_ROOT:-.zmk-workspace}/profiles/${ZMK_WORK_PROFILE:-default}/west}"
+    west_config="$west_workspace/.west/config"
+    if [ ! -f "$west_config" ]; then
+      printf '%s\n' "${ZMK_WORK_PROFILE:-default}"
+      exit 0
+    fi
+    path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
+    file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
+    config_root="$(dirname "$west_workspace/${path:-.}/$file")/.."
+  fi
+  config_root="$(realpath -m "$config_root")"
+
+  git_root=$(git -C "$config_root" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -n "$git_root" ] && [ "$(realpath -m "$git_root")" = "$config_root" ]; then
+    branch=$(git -C "$config_root" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    [ -n "$branch" ] || branch="${ZMK_WORK_PROFILE:-default}"
+  else
+    branch="${ZMK_WORK_PROFILE:-default}"
   fi
 
-  printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g'
+  printf '%s' "$branch" | tr '/' '-' | sed 's/[":<>|*?\\]/-/g'
 `
 out := absolute_path('firmware') / zmk_config_name / zmk_config_branch
 
@@ -96,21 +121,36 @@ _build_single $board $shield $snippet $artifact *west_args:
     build_dir="{{ build / '$artifact_fs' }}"
     echo "Building firmware for $artifact..."
 
-    # Check if zephyr/module.yml exists to determine whether to include DZMK_EXTRA_MODULES
-    if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
-        (
-            cd "{{ west_workspace }}"
-            west build -p auto -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
-                -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
-                -DZMK_CONFIG=""{{ zmk_config_root }}/config"" -DZMK_EXTRA_MODULES="{{ zmk_config_root }}" ${shield:+-DSHIELD="$shield"}
-        )
+    signature_file="$build_dir/.zmk-workspace-config"
+    build_signature="$(printf 'version=1\nboard=%s\nshield=%s\nsnippet=%s\nconfig=%s\n' \
+        "$board" "$shield" "$snippet" "{{ zmk_config_root }}")"
+
+    # Supplying CMake arguments to `west build` forces a configure on every run.
+    # That refreshes generated headers and causes a large, unnecessary rebuild.
+    # Existing build trees can safely let Ninja regenerate CMake only when an
+    # actual dependency changes.
+    west_extra_args=({{ west_args }})
+    if [[ -f "$build_dir/build.ninja" && ${#west_extra_args[@]} -eq 0 ]] && \
+        cmp -s <(printf '%s\n' "$build_signature") "$signature_file"; then
+        cmake --build "$build_dir"
     else
+        cmake_args=(
+            -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake"
+            -DZMK_CONFIG="{{ zmk_config_root }}/config"
+        )
+        if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
+            cmake_args+=(-DZMK_EXTRA_MODULES="{{ zmk_config_root }}")
+        fi
+        if [[ -n "$shield" ]]; then
+            cmake_args+=(-DSHIELD="$shield")
+        fi
+
         (
             cd "{{ west_workspace }}"
-            west build -p auto -s zmk/app -d "$build_dir" -b $board {{ west_args }} ${snippet:+-S "$snippet"} -- \
-                -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake" \
-                -DZMK_CONFIG=""{{ zmk_config_root }}/config"" ${shield:+-DSHIELD="$shield"}
+            west build -p auto -s zmk/app -d "$build_dir" -b "$board" \
+                "${west_extra_args[@]}" ${snippet:+-S "$snippet"} -- "${cmake_args[@]}"
         )
+        printf '%s\n' "$build_signature" > "$signature_file"
     fi
 
     if [[ -f "$build_dir/zephyr/zmk.uf2" ]]; then
@@ -136,6 +176,32 @@ build expr *west_args:
         just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }}
     done <<< "$targets"
 
+# build matching targets with automatically tuned target/compiler parallelism
+build-fast expr *west_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container build-fast "{{ expr }}" {{ west_args }}
+    fi
+
+    cores="$(nproc)"
+    memory_kib="$(awk '/MemTotal:/ {print $2}' /proc/meminfo)"
+
+    # Keep at least two cores and about 2 GiB available per concurrent target.
+    target_jobs="${ZMK_TARGET_JOBS:-$((cores / 2))}"
+    memory_jobs=$((memory_kib / 1024 / 2048))
+    (( target_jobs < 1 )) && target_jobs=1
+    (( memory_jobs < 1 )) && memory_jobs=1
+    (( target_jobs > memory_jobs )) && target_jobs="$memory_jobs"
+    (( target_jobs > 4 )) && target_jobs=4
+
+    compiler_jobs="${CMAKE_BUILD_PARALLEL_LEVEL:-$((cores / target_jobs))}"
+    (( compiler_jobs < 1 )) && compiler_jobs=1
+    export CMAKE_BUILD_PARALLEL_LEVEL="$compiler_jobs"
+
+    echo "Auto-tuned parallelism: targets=$target_jobs, compilers/target=$compiler_jobs (cores=$cores)"
+    exec just build-parallel "{{ expr }}" "$target_jobs" {{ west_args }}
+
 # build firmware for matching targets in parallel
 build-parallel expr jobs *west_args:
     #!/usr/bin/env bash
@@ -156,7 +222,7 @@ build-parallel expr jobs *west_args:
     export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-2}"
 
     run_id="$(date +%Y%m%d-%H%M%S)"
-    log_dir="{{ build }}/logs/build-parallel-${run_id}"
+    log_dir="{{ log_root }}/build-parallel-${run_id}"
     status_dir="$log_dir/status"
     mkdir -p "$status_dir"
 
@@ -329,11 +395,16 @@ init *config_path:
         west_yml_abs="$config_path/config/west.yml"
     fi
 
-    # Convert to path relative to config
-    west_yml_rel=$(realpath --relative-to=config "$west_yml_abs")
-
+    # Keep the manifest in config/, even when the west workspace is nested under
+    # .zmk-workspace/profiles/<name>/west.
     mkdir -p "{{ west_workspace }}/.west"
-    printf '[manifest]\npath = ../config\nfile = %s\n' "$west_yml_rel" > "{{ west_workspace }}/.west/config"
+    config_dir_abs="$(realpath config)"
+    west_workspace_abs="$(realpath "{{ west_workspace }}")"
+    manifest_path_rel="$(realpath --relative-to="$west_workspace_abs" "$config_dir_abs")"
+    west_yml_rel="$(realpath --relative-to="$config_dir_abs" "$west_yml_abs")"
+
+    printf '[manifest]\npath = %s\nfile = %s\n' \
+        "$manifest_path_rel" "$west_yml_rel" > "{{ west_workspace }}/.west/config"
 
     (
         cd "{{ west_workspace }}"

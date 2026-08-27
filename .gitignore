@@ -1,11 +1,17 @@
 .build
+.build-*/
 .cache
+.zmk-workspace/
 .direnv
 .codex-remote-attachments
+.fleet-workspace/
 .tmp-*
+/tmp-build-*.sh
+/work/
 __pycache__
 .west
 .west-workspace
+.west-workspace-*/
 logs
 modules
 firmware
