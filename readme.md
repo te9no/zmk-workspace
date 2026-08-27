@@ -27,6 +27,10 @@ Builds use `ccache` inside the container. The shared cache is stored at `.zmk-wo
 
 Use profiles to isolate experiments without creating `.build-*` and `.west-workspace-*` directories in the repository root:
 
+Repository placement is intentionally strict: keep canonical checkouts in
+`config/`, temporary clones and Git worktrees in `work/`, and never place a Git
+repository or worktree under `.fleet-workspace/`.
+
 ```sh
 ./just.sh profile polaris-dya-v2
 ./just.sh init config/zmk-config-GeaconPolaris
@@ -235,6 +239,8 @@ USB CDC ACM の 1200 baud bootloader trigger が入ったファームウェア�
 詳細は `docs/zmk-flash-log-loop.md` にまとめています。
 
 `init` で取得される ZMK / Zephyr / modules、ビルドツリー、並列ビルドのログは、`.zmk-workspace/profiles/<プロファイル名>/` の下へまとめて作られます。実験ごとに `.build-*` や `.west-workspace-*` がリポジトリ直下へ増えない構成です。
+
+リポジトリの配置は、正規のcheckoutを`config/`、一時cloneとGit worktreeを`work/`へ統一します。`.fleet-workspace/`配下にはGitリポジトリやworktreeを置きません。
 
 たとえば Polaris の DYA Studio V2 検証環境を分離する場合は、次のようにプロファイルを選択してから初期化します。選択したプロファイルは次回以降も維持されます。
 
