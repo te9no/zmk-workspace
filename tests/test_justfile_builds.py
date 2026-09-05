@@ -18,6 +18,10 @@ class JustfileBuildTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.config = self.root / "config-repo"
         (self.config / "config").mkdir(parents=True)
+        subprocess.run(['git', 'init', str(self.config)], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(self.config), '-c', 'user.name=Test',
+                        '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty',
+                        '-m', 'fixture'], check=True, capture_output=True)
         self.west = self.root / "managed/profiles/test/west"
         self.west.mkdir(parents=True)
         self.build = self.root / "managed/profiles/test/build"
@@ -28,11 +32,13 @@ class JustfileBuildTest(unittest.TestCase):
         fake_west = self.fake_bin / "west"
         fake_west.write_text(
             "#!/usr/bin/env bash\nset -eu\n"
+            "[ \"$1\" != list ] || exit 0\n"
             "printf '<%s>\\n' \"$@\" > \"$WEST_LOG\"\n"
             "build_dir=''\nprevious=''\n"
             "for arg in \"$@\"; do [ \"$previous\" != -d ] || build_dir=\"$arg\"; previous=\"$arg\"; done\n"
             "mkdir -p \"$build_dir/zephyr\"\n"
             "touch \"$build_dir/build.ninja\"\n"
+            "touch \"$build_dir/zephyr/.config\" \"$build_dir/zephyr/zephyr.dts\"\n"
             "[ \"${WEST_SKIP_ARTIFACT:-0}\" = 1 ] || printf fixture > \"$build_dir/zephyr/zmk.uf2\"\n"
         )
         fake_west.chmod(0o755)

@@ -532,6 +532,7 @@ if docker run --rm \
     "${docker_cmake_parallel_args[@]}" \
     "${docker_workspace_args[@]}" \
     --volume "$repo_dir:$workspace" \
+    --volume "$repo_dir:$repo_dir" \
     --workdir "$workspace" \
     "$image" \
     bash -lc 'exec "$@"' _ just "$@"; then

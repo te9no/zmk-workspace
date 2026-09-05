@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path, PureWindowsPath
 import re
@@ -95,7 +97,27 @@ def publish_paths(workspace: Path, folder: str, repository: str, branch: str):
     }
 
 
-def validate_staging(staging: Path, expected_count: int) -> list[Path]:
+def validate_metadata(entries, required=False):
+    binaries = [p for p in entries if p.suffix.lower() in ALLOWED_SUFFIXES]
+    allowed = set(binaries) | {Path(str(p) + '.json') for p in binaries}
+    if any(p not in allowed for p in entries):
+        raise ValueError('unexpected file type or orphan provenance')
+    for binary in binaries:
+        sidecar = Path(str(binary) + '.json')
+        if sidecar not in entries:
+            if required:
+                raise ValueError('missing firmware provenance')
+            continue
+        metadata = json.loads(sidecar.read_text(encoding='utf-8'))
+        with binary.open('rb') as stream:
+            sha = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if (metadata.get('schema') != 1 or metadata.get('artifact') !=
+                {'name': binary.name, 'sha256': sha}):
+            raise ValueError('firmware provenance does not match binary')
+    return binaries
+
+
+def validate_staging(staging: Path, expected_count: int, require_provenance=False) -> list[Path]:
     staging = lexical_absolute(staging)
     reject_symlink_components(staging, Path(staging.anchor), "staging directory")
     if expected_count < 1:
@@ -105,12 +127,11 @@ def validate_staging(staging: Path, expected_count: int) -> list[Path]:
     entries = list(staging.iterdir())
     if any(entry.is_symlink() or not entry.is_file() for entry in entries):
         raise ValueError("staging must contain only flat firmware files")
-    if len(entries) != expected_count:
+    binaries = validate_metadata(entries, require_provenance)
+    if len(binaries) != expected_count:
         raise ValueError(
             f"expected {expected_count} firmware files, found {len(entries)}"
         )
-    if any(entry.suffix.lower() not in ALLOWED_SUFFIXES for entry in entries):
-        raise ValueError("staging contains an unexpected file type")
     return entries
 
 
@@ -122,8 +143,7 @@ def validate_existing_tree(destination: Path) -> list[Path]:
     entries = list(destination.iterdir())
     if any(entry.is_symlink() or not entry.is_file() for entry in entries):
         raise ValueError("existing firmware tree must contain only flat regular files")
-    if any(entry.suffix.lower() not in ALLOWED_SUFFIXES for entry in entries):
-        raise ValueError("existing firmware tree contains an unexpected file type")
+    validate_metadata(entries)
     return entries
 
 
@@ -135,11 +155,12 @@ def install_firmware_tree(
     expected_count: int,
     mode: str,
     replace=os.replace,
+    require_provenance=False,
 ) -> None:
     workspace = lexical_absolute(workspace)
     firmware_root = strict_child(firmware_root, workspace, "firmware root")
     destination = strict_child(destination, firmware_root, "firmware destination")
-    files = validate_staging(staging, expected_count)
+    files = validate_staging(staging, expected_count, require_provenance)
     existing_files = validate_existing_tree(destination)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -153,9 +174,11 @@ def install_firmware_tree(
             for source in existing_files:
                 shutil.copy2(source, incoming / source.name)
         for source in files:
-            for suffix in ALLOWED_SUFFIXES:
-                if suffix != source.suffix.lower():
+            if source.suffix.lower() in ALLOWED_SUFFIXES:
+                for suffix in ALLOWED_SUFFIXES:
                     (incoming / f"{source.stem}{suffix}").unlink(missing_ok=True)
+                    (incoming / f"{source.stem}{suffix}.json").unlink(missing_ok=True)
+        for source in files:
             shutil.copy2(source, incoming / source.name)
 
         if destination.exists():
@@ -202,6 +225,7 @@ def main() -> None:
     install.add_argument("--destination", type=Path, required=True)
     install.add_argument("--expected-count", type=int, required=True)
     install.add_argument("--mode", choices=("replace", "merge"), required=True)
+    install.add_argument("--require-provenance", action="store_true")
     args = parser.parse_args()
     if args.command == "paths":
         values = publish_paths(
@@ -213,6 +237,7 @@ def main() -> None:
     install_firmware_tree(
         args.workspace, firmware_root, args.staging, args.destination,
         args.expected_count, args.mode,
+        require_provenance=args.require_provenance,
     )
 
 

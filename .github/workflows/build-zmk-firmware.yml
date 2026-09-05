@@ -238,6 +238,13 @@ jobs:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
 
+      - name: Checkout provenance tools
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tool_repository }}
+          ref: ${{ inputs.tool_ref }}
+          path: .zmk-workspace-tools
+
       - name: 🗂️ Create build directory
         run: |
           build_dir="$(mktemp -d)"
@@ -335,6 +342,11 @@ jobs:
           ccache -z || true
           ccache -s || true
 
+      - name: Capture firmware inputs
+        run: |
+          python3 .zmk-workspace-tools/scripts/firmware_provenance.py capture \
+            --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$build_dir/build-inputs.json"
+
       - name: 🔨 West build (${{ env.display_name }})
         working-directory: ${{ env.base_dir }}
         shell: bash
@@ -425,6 +437,17 @@ jobs:
             exit 1
           fi
 
+      - name: Verify inputs and record firmware provenance
+        env:
+          TARGET_JSON: ${{ toJSON(matrix) }}
+        run: |
+          set -euo pipefail
+          for artifact in "$build_dir"/artifacts/*; do
+            python3 .zmk-workspace-tools/scripts/firmware_provenance.py finish \
+              --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$build_dir/build-inputs.json" \
+              --build "$build_dir" --target "$TARGET_JSON" --artifact "$artifact"
+          done
+
       - name: ⬆️ Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -443,6 +466,8 @@ jobs:
     steps:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: 🧰 Checkout ZMK workspace tools
         uses: actions/checkout@v4
@@ -458,6 +483,14 @@ jobs:
           set -euo pipefail
           git fetch origin "$GITHUB_REF_NAME"
           git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
+
+      - name: Reject stale firmware publication
+        env:
+          FIRMWARE_FOLDER: ${{ inputs.firmware_folder }}
+        run: |
+          python3 .zmk-workspace-tools/scripts/firmware_provenance.py guard \
+            --source "$GITHUB_SHA" --current HEAD --root "$GITHUB_WORKSPACE" \
+            --firmware-folder "$FIRMWARE_FOLDER"
 
       - name: 🧭 Get repository and branch names
         id: output-path
@@ -504,13 +537,13 @@ jobs:
           set -euo pipefail
           staging_dir="${{ steps.staging.outputs.path }}"
           expected="${{ needs.matrix.outputs.target_count }}"
-          count="$(find "$staging_dir" -type f | wc -l)"
+          count="$(find "$staging_dir" -type f \( -name '*.uf2' -o -name '*.bin' \) | wc -l)"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           if [ "$count" -ne "$expected" ]; then
             echo "❌ Expected ${expected} firmware files, downloaded ${count}." >&2
             exit 1
           fi
-          if find "$staging_dir" -type f ! \( -name '*.uf2' -o -name '*.bin' \) -print -quit | grep -q .; then
+          if find "$staging_dir" -type f ! \( -name '*.uf2' -o -name '*.bin' -o -name '*.uf2.json' -o -name '*.bin.json' \) -print -quit | grep -q .; then
             echo "❌ Staging contains an unexpected file type." >&2
             exit 1
           fi
@@ -544,6 +577,7 @@ jobs:
             --staging "$STAGING_DIR" \
             --destination "$GITHUB_WORKSPACE/$FIRMWARE_DIR" \
             --expected-count "$EXPECTED_COUNT" \
+            --require-provenance \
             --mode "$PUBLISH_MODE"
           echo "installed=true" >> "$GITHUB_OUTPUT"
 
