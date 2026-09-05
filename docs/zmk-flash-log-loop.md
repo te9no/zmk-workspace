@@ -138,6 +138,7 @@ tools/zmk-flash-log.sh MY_KEYBOARD_RIGHT COM12 --blocked-ports "COM3 COM4"
   - Uses a different serial port for logs.
 - `--drive <letter>`
   - Restricts UF2 drive detection to a Windows drive letter.
+  - Use this whenever more than one UF2 loader may be connected.
 - `--bootloader-baud <n>`
   - Defaults to `1200`.
 - `--bootloader-delay-ms <n>`
@@ -146,3 +147,8 @@ tools/zmk-flash-log.sh MY_KEYBOARD_RIGHT COM12 --blocked-ports "COM3 COM4"
   - Defaults to `60` seconds.
 - `--post-flash-delay-ms <n>`
   - Defaults to `200`.
+
+Without `--drive`, a serial-port trigger records the UF2 drives visible before
+the trigger and accepts exactly one newly appeared loader afterward. Without a
+trigger port, exactly one existing loader is accepted. Multiple candidates are
+reported and rejected rather than choosing the first drive.

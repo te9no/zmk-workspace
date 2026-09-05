@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from devicetree_blocks import find_labeled_block, find_named_block, iter_blocks
+
 
 @dataclass
 class Key:
@@ -57,26 +59,6 @@ class Combo:
     layers: list[int] | None = None
 
 
-def find_labeled_block(text, label):
-    match = re.search(rf"\b{re.escape(label)}\s*:\s*[A-Za-z0-9_,@-]+\s*\{{", text)
-    if not match:
-        raise SystemExit(f"Could not find node label: {label}")
-
-    start = match.end()
-    depth = 1
-    index = start
-    while index < len(text) and depth:
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-        index += 1
-
-    if depth:
-        raise SystemExit(f"Unclosed node block for label: {label}")
-    return text[start : index - 1]
-
-
 def try_find_labeled_block(text, label):
     try:
         return find_labeled_block(text, label)
@@ -84,82 +66,22 @@ def try_find_labeled_block(text, label):
         return None
 
 
-def find_named_block(text, name):
-    match = re.search(rf"\b{re.escape(name)}\s*\{{", text)
-    if not match:
-        raise SystemExit(f"Could not find node: {name}")
-
-    start = match.end()
-    depth = 1
-    index = start
-    while index < len(text) and depth:
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-        index += 1
-
-    if depth:
-        raise SystemExit(f"Unclosed node block for: {name}")
-    return text[start : index - 1]
-
-
 def iter_child_blocks(text):
-    index = 0
     pattern = re.compile(r"\b([A-Za-z0-9_]+)\s*\{")
-    while True:
-        match = pattern.search(text, index)
-        if not match:
-            break
-
-        name = match.group(1)
-        start = match.end()
-        depth = 1
-        cursor = start
-        while cursor < len(text) and depth:
-            if text[cursor] == "{":
-                depth += 1
-            elif text[cursor] == "}":
-                depth -= 1
-            cursor += 1
-
-        if depth:
-            raise SystemExit(f"Unclosed node block for: {name}")
-        yield name, text[start : cursor - 1]
-        index = cursor
+    yield from iter_blocks(text, pattern)
 
 
 def find_first_physical_layout_label(text):
-    for match in re.finditer(r"\b([A-Za-z0-9_]+)\s*:\s*[A-Za-z0-9_,@-]+\s*\{", text):
-        block = find_labeled_block(text, match.group(1))
+    for label, block in iter_labeled_blocks(text):
         if re.search(r'compatible\s*=\s*"zmk,physical-layout"', block):
-            return match.group(1)
+            return label
     raise SystemExit("Could not find a zmk,physical-layout node")
 
 
 def iter_labeled_blocks(text):
-    index = 0
     pattern = re.compile(r"\b([A-Za-z0-9_]+)\s*:\s*[A-Za-z0-9_,@-]+\s*\{")
-    while True:
-        match = pattern.search(text, index)
-        if not match:
-            break
-
-        label = match.group(1)
-        start = match.end()
-        depth = 1
-        cursor = start
-        while cursor < len(text) and depth:
-            if text[cursor] == "{":
-                depth += 1
-            elif text[cursor] == "}":
-                depth -= 1
-            cursor += 1
-
-        if depth:
-            raise SystemExit(f"Unclosed node block for label: {label}")
-        yield label, text[start : cursor - 1]
-        index = cursor
+    for label, block in iter_blocks(text, pattern):
+        yield label, block
 
 
 def clean_number(value):

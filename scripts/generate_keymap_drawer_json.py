@@ -4,25 +4,7 @@ import json
 import re
 from pathlib import Path
 
-
-def find_labeled_block(text, label):
-    match = re.search(rf"\b{re.escape(label)}\s*:\s*[A-Za-z0-9_,@-]+\s*\{{", text)
-    if not match:
-        raise SystemExit(f"Could not find node label: {label}")
-
-    start = match.end()
-    depth = 1
-    index = start
-    while index < len(text) and depth:
-        if text[index] == "{":
-            depth += 1
-        elif text[index] == "}":
-            depth -= 1
-        index += 1
-
-    if depth:
-        raise SystemExit(f"Unclosed node block for label: {label}")
-    return text[start : index - 1]
+from devicetree_blocks import find_labeled_block
 
 
 def clean_number(value):

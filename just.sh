@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "$repo_dir/scripts/workspace-safety.sh"
 image="${ZMK_WORKSPACE_CONTAINER_IMAGE:-zmk-workspace-dev:latest}"
 workspace="/zmk-workspace"
 dockerfile="$repo_dir/.devcontainer/Dockerfile"
@@ -31,6 +32,8 @@ esac
 
 storage_dir="$(realpath -m "$repo_dir/$storage_rel")"
 container_storage_dir="$(realpath -m "$workspace/$storage_rel")"
+zmk_require_within "$storage_dir" "$repo_dir" "ZMK_WORK_ROOT" >/dev/null
+zmk_require_within "$container_storage_dir" "$workspace" "container ZMK_WORK_ROOT" >/dev/null
 active_profile_file="$storage_dir/active-profile"
 
 requested_profile="${ZMK_WORK_PROFILE:-}"
@@ -52,11 +55,7 @@ else
 fi
 
 validate_profile() {
-    local value="$1"
-    if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-        echo "Invalid profile '$value'. Use letters, numbers, dot, underscore, or hyphen." >&2
-        return 2
-    fi
+    zmk_validate_profile "$1"
 }
 validate_profile "$profile"
 
@@ -105,7 +104,7 @@ load_profile_metadata() {
 
 config_root_from_west() {
     local west_config="$host_west_workspace/.west/config"
-    local west_top="$host_west_workspace" path file west_yml_path
+    local west_top="$host_west_workspace" path file west_yml_path manifest_dir manifest_git_root
 
     if [[ -n "${ZMK_CONFIG_ROOT:-}" ]]; then
         workspace_path_to_host "$ZMK_CONFIG_ROOT"
@@ -127,7 +126,18 @@ config_root_from_west() {
     path="$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")"
     file="$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")"
     west_yml_path="$west_top/${path:-.}/${file:-west.yml}"
-    realpath -m "$(dirname "$west_yml_path")/.."
+    manifest_dir="$(dirname "$west_yml_path")"
+    manifest_git_root="$(git -C "$manifest_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$manifest_git_root" ]] && {
+        [[ "$(realpath -m "$manifest_dir")" == "$(realpath -m "$manifest_git_root")" ]] ||
+        [[ "$(realpath -m "$manifest_dir")" == "$(realpath -m "$manifest_git_root/config")" ]]
+    }; then
+        realpath -m "$manifest_git_root"
+    elif [[ "$(basename "$manifest_dir")" == config ]]; then
+        realpath -m "$manifest_dir/.."
+    else
+        realpath -m "$manifest_dir"
+    fi
 }
 
 save_profile_metadata() {
@@ -215,6 +225,19 @@ export ZMK_BUILD_ROOT ZMK_WEST_WORKSPACE ZMK_LOG_ROOT
 host_build_root="$(workspace_path_to_host "$ZMK_BUILD_ROOT")"
 host_west_workspace="$(workspace_path_to_host "$ZMK_WEST_WORKSPACE")"
 host_log_root="$(workspace_path_to_host "$ZMK_LOG_ROOT")"
+
+# Destructive commands are restricted before Docker sees the bind mount. Other
+# commands keep supporting legacy custom roots inside this checkout.
+case "${1:-}" in
+    clean|clean-all)
+        safe_storage_dir="$(zmk_require_symlink_free_within "$repo_dir/$storage_rel" "$repo_dir" "ZMK_WORK_ROOT")"
+        safe_profile_dir="$(zmk_require_safe_child "$safe_storage_dir/profiles/$profile" "$safe_storage_dir" "profile root")"
+        zmk_require_safe_child "$host_build_root" "$safe_profile_dir" "ZMK_BUILD_ROOT" >/dev/null
+        zmk_require_safe_child "$host_west_workspace" "$safe_profile_dir" "ZMK_WEST_WORKSPACE" >/dev/null
+        zmk_require_safe_child "$ZMK_BUILD_ROOT" "$container_profile_dir" "container ZMK_BUILD_ROOT" >/dev/null
+        zmk_require_safe_child "$ZMK_WEST_WORKSPACE" "$container_profile_dir" "container ZMK_WEST_WORKSPACE" >/dev/null
+        ;;
+esac
 
 load_profile_metadata
 
@@ -365,33 +388,54 @@ if [[ "${1:-}" == "flash" ]]; then
     shift
     expr="${1:-}"
     if [[ -z "$expr" ]]; then
-        echo "Usage: ./just.sh flash <target> [-r] [west build args...]" >&2
+        echo "Usage: ./just.sh flash <target> [-r] [--mount name|--drive letter] [west build args...]" >&2
         exit 2
     fi
     shift
 
     rebuild=false
+    target_mount="${FLASH_TARGET_MOUNT:-}"
+    target_drive="${FLASH_TARGET_DRIVE:-}"
     build_args=()
-    for arg in "$@"; do
-        if [[ "$arg" == "-r" ]]; then
-            rebuild=true
-        else
-            build_args+=("$arg")
-        fi
+    while (( $# > 0 )); do
+        case "$1" in
+            -r) rebuild=true; shift ;;
+            --mount)
+                (( $# >= 2 )) || { echo "--mount requires a value." >&2; exit 2; }
+                target_mount="$2"; shift 2 ;;
+            --drive)
+                (( $# >= 2 )) || { echo "--drive requires a value." >&2; exit 2; }
+                target_drive="$2"; shift 2 ;;
+            *) build_args+=("$1"); shift ;;
+        esac
     done
+
+    targets_output="$("$repo_dir/just.sh" _parse_targets_json "$expr")"
+    targets=()
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] || targets+=("$candidate")
+    done <<< "$targets_output"
+    if (( ${#targets[@]} == 0 )); then
+        echo "No matching targets found for expression '$expr'. Aborting..." >&2
+        exit 1
+    fi
+    if (( ${#targets[@]} != 1 )); then
+        echo "Expression '$expr' matches multiple targets; choose one of:" >&2
+        for candidate in "${targets[@]}"; do
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("  " + ", ".join(f"{k}={d[k]}" for k in ("artifact-name", "board", "shield", "snippet", "cmake-args") if d.get(k)))' "$candidate" >&2
+        done
+        exit 2
+    fi
+    target="${targets[0]}"
 
     if [[ "$rebuild" == "true" ]]; then
         echo "Rebuilding before flashing..."
         "$repo_dir/just.sh" build "$expr" "${build_args[@]}"
     fi
 
-    target="$("$repo_dir/just.sh" _parse_targets "$expr" | head -n 1)"
-    if [[ -z "$target" ]]; then
-        echo "No matching targets found for expression '$expr'. Aborting..." >&2
-        exit 1
-    fi
-
-    IFS=, read -r board shield snippet artifact <<< "$target"
+    IFS=$'\x1f' read -r board shield snippet artifact < <(
+        python3 -c 'import json, sys; d=json.loads(sys.argv[1]); print("\x1f".join(str(d.get(k, "")) for k in ("board", "shield", "snippet", "artifact-name")))' "$target"
+    )
     artifact_name="${artifact:-${shield:+${shield// /+}-}${board}}"
     artifact_fs="${artifact_name//\//-}"
     uf2_path="$(firmware_dir)/$artifact_fs.uf2"
@@ -402,10 +446,18 @@ if [[ "${1:-}" == "flash" ]]; then
     fi
 
     if [[ "$OSTYPE" == "darwin"* ]]; then
+        [[ -z "$target_drive" ]] || { echo "--drive is only valid on Windows/WSL." >&2; exit 2; }
         echo "Flashing '$uf2_path'..."
+        if [[ -n "$target_mount" ]]; then
+            exec "$repo_dir/flash.sh" "$uf2_path" "$target_mount"
+        fi
         exec "$repo_dir/flash.sh" "$uf2_path"
     elif grep -q -i "Microsoft" /proc/version; then
+        [[ -z "$target_mount" ]] || { echo "--mount is only valid on macOS." >&2; exit 2; }
         echo "Flashing '$uf2_path'..."
+        if [[ -n "$target_drive" ]]; then
+            exec powershell.exe -ExecutionPolicy Bypass -File "$repo_dir/flash.ps1" -Uf2File "$(wslpath -w "$uf2_path")" -DriveLetter "$target_drive"
+        fi
         exec powershell.exe -ExecutionPolicy Bypass -File "$repo_dir/flash.ps1" -Uf2File "$(wslpath -w "$uf2_path")"
     else
         echo "Flashing '$uf2_path' is not supported on this platform." >&2

@@ -4,13 +4,27 @@ on:
   push:
     paths:
       - just.sh
-      - tools/zmk-flash-log.sh
+      - Justfile
+      - flash.sh
+      - flash.ps1
+      - tools/**
+      - scripts/**
+      - .github/scripts/**
+      - .github/workflows/build-zmk-firmware.yml
+      - .github/workflows/draw-keymap-svg.yml
       - tests/**
       - .github/workflows/workspace-path-tests.yml
   pull_request:
     paths:
       - just.sh
-      - tools/zmk-flash-log.sh
+      - Justfile
+      - flash.sh
+      - flash.ps1
+      - tools/**
+      - scripts/**
+      - .github/scripts/**
+      - .github/workflows/build-zmk-firmware.yml
+      - .github/workflows/draw-keymap-svg.yml
       - tests/**
       - .github/workflows/workspace-path-tests.yml
   workflow_dispatch:
@@ -23,7 +37,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y just python3-yaml
       - name: Check shell syntax
-        run: bash -n just.sh tools/zmk-flash-log.sh
+        run: bash -n just just.sh flash.sh tools/zmk-flash-log.sh scripts/workspace-safety.sh
+      - name: Check Justfile and script syntax
+        shell: bash
+        run: |
+          just --unstable --fmt --check
+          ruby -c .github/scripts/compose-build-matrix.rb
+          python3 -m py_compile scripts/*.py .github/scripts/*.py
+          pwsh -NoProfile -Command '$errors=$null; foreach($file in @("flash.ps1", "tools/zmk-flash-log.ps1")){[System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$null,[ref]$errors)|Out-Null; if($errors){$errors | ForEach-Object { Write-Error $_ }; exit 1}}'
+          pwsh -NoProfile -File tests/flash_safety.Tests.ps1
       - name: Verify profile and CDC artifact resolution without hardware
         run: python3 -m unittest discover -s tests -v

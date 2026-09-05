@@ -72,7 +72,7 @@ on:
         value: ${{ jobs.matrix.outputs.matrix }}
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 concurrency:
@@ -86,6 +86,9 @@ jobs:
     outputs:
       matrix: ${{ steps.compose.outputs.matrix }}
       has_targets: ${{ steps.compose.outputs.has_targets }}
+      target_count: ${{ steps.compose.outputs.target_count }}
+      total_target_count: ${{ steps.compose.outputs.total_target_count }}
+      publish_mode: ${{ steps.compose.outputs.publish_mode }}
     steps:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
@@ -117,9 +120,18 @@ jobs:
           echo "🧭 Reading build matrix: $BUILD_YAML"
           echo "🎯 Target filter: $TARGET"
           matrix_json="$(ruby "$MATRIX_SCRIPT" "$BUILD_YAML" "$TARGET")"
+          all_matrix_json="$(ruby "$MATRIX_SCRIPT" "$BUILD_YAML" all)"
           echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
 
           count="$(printf '%s' "$matrix_json" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("include", []).length')"
+          total_count="$(printf '%s' "$all_matrix_json" | ruby -rjson -e 'print JSON.parse(STDIN.read).fetch("include", []).length')"
+          echo "target_count=${count}" >> "$GITHUB_OUTPUT"
+          echo "total_target_count=${total_count}" >> "$GITHUB_OUTPUT"
+          if [ "$count" -eq "$total_count" ]; then
+            echo "publish_mode=replace" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish_mode=merge" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$count" -gt 0 ]; then
             echo "has_targets=true" >> "$GITHUB_OUTPUT"
           else
@@ -421,13 +433,23 @@ jobs:
 
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     needs:
       - matrix
       - build
-    if: ${{ always() && needs.matrix.outputs.has_targets == 'true' && needs.build.result != 'cancelled' }}
+    if: ${{ needs.matrix.outputs.has_targets == 'true' && needs.build.result == 'success' }}
     steps:
       - name: 📥 Checkout config repository
         uses: actions/checkout@v4
+
+      - name: 🧰 Checkout ZMK workspace tools
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.tool_repository }}
+          ref: ${{ inputs.tool_ref }}
+          path: .zmk-workspace-tools
 
       - name: 🔄 Sync caller branch before firmware publish
         if: ${{ startsWith(github.ref, 'refs/heads/') }}
@@ -440,52 +462,60 @@ jobs:
       - name: 🧭 Get repository and branch names
         id: output-path
         shell: bash
+        env:
+          FIRMWARE_FOLDER: ${{ inputs.firmware_folder }}
+          PATH_HELPER: .zmk-workspace-tools/.github/scripts/install-firmware-tree.py
         run: |
+          set -euo pipefail
           branch="${GITHUB_REF#refs/heads/}"
           if [ "$branch" = "$GITHUB_REF" ]; then
             branch="${GITHUB_REF_NAME}"
           fi
-          repo="${GITHUB_REPOSITORY#*/}"
-          safe_repo="$(printf '%s' "$repo" | sed 's/[":<>|*?\\\/]/-/g')"
-          safe_branch="$(printf '%s' "$branch" | sed 's/[":<>|*?\\\/]/-/g')"
-          firmware_dir="${{ inputs.firmware_folder }}/${safe_repo}/${safe_branch}"
-          echo "repo=${repo}" >> "$GITHUB_OUTPUT"
-          echo "safe_repo=${safe_repo}" >> "$GITHUB_OUTPUT"
-          echo "branch=${branch}" >> "$GITHUB_OUTPUT"
-          echo "safe_branch=${safe_branch}" >> "$GITHUB_OUTPUT"
-          echo "firmware_dir=${firmware_dir}" >> "$GITHUB_OUTPUT"
-          echo "📦 Repository: $repo"
-          echo "🧼 Safe repository: $safe_repo"
+          python3 "$PATH_HELPER" paths \
+            --workspace "$GITHUB_WORKSPACE" \
+            --firmware-folder "$FIRMWARE_FOLDER" \
+            --repository "$GITHUB_REPOSITORY" \
+            --branch "$branch" \
+            --github-output "$GITHUB_OUTPUT"
+          echo "📦 Repository: ${GITHUB_REPOSITORY#*/}"
           echo "🧭 Branch: $branch"
-          echo "🧼 Safe branch: $safe_branch"
-          echo "📁 Firmware directory: $firmware_dir"
+          echo "📁 Firmware publish paths validated."
 
-      - name: 🗂️ Prepare firmware directory
+      - name: 🗂️ Prepare firmware staging directory
+        id: staging
         run: |
-          mkdir -p "${{ steps.output-path.outputs.firmware_dir }}"
-          rm -rf "${{ steps.output-path.outputs.firmware_dir }}"/*
-          echo "🗂️ Firmware directory: ${{ steps.output-path.outputs.firmware_dir }}"
+          set -euo pipefail
+          staging_dir="$RUNNER_TEMP/zmk-firmware-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf -- "$staging_dir"
+          mkdir -p "$staging_dir"
+          echo "path=${staging_dir}" >> "$GITHUB_OUTPUT"
+          echo "🗂️ Firmware staging directory prepared."
 
       - name: ⬇️ Download firmware artifacts
         uses: actions/download-artifact@v4
-        continue-on-error: true
         with:
-          path: ${{ steps.output-path.outputs.firmware_dir }}
+          path: ${{ steps.staging.outputs.path }}
           pattern: artifact-*
           merge-multiple: true
 
       - name: 🔍 Check downloaded firmware
         id: firmware-files
         run: |
-          count="$(find "${{ steps.output-path.outputs.firmware_dir }}" -type f | wc -l)"
+          set -euo pipefail
+          staging_dir="${{ steps.staging.outputs.path }}"
+          expected="${{ needs.matrix.outputs.target_count }}"
+          count="$(find "$staging_dir" -type f | wc -l)"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
-          if [ "$count" -gt 0 ]; then
-            echo "has_files=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Downloaded ${count} firmware file(s)."
-          else
-            echo "has_files=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️ No successful firmware artifacts were found."
+          if [ "$count" -ne "$expected" ]; then
+            echo "❌ Expected ${expected} firmware files, downloaded ${count}." >&2
+            exit 1
           fi
+          if find "$staging_dir" -type f ! \( -name '*.uf2' -o -name '*.bin' \) -print -quit | grep -q .; then
+            echo "❌ Staging contains an unexpected file type." >&2
+            exit 1
+          fi
+          echo "has_files=true" >> "$GITHUB_OUTPUT"
+          echo "✅ Downloaded and verified ${count} firmware file(s)."
           {
             echo "## 📦 Firmware Publish"
             echo
@@ -497,17 +527,37 @@ jobs:
             echo "- 📦 Firmware files: **${count}**"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: 🔁 Install verified firmware set
+        id: install
+        shell: bash
+        env:
+          FIRMWARE_FOLDER: ${{ steps.output-path.outputs.firmware_root }}
+          FIRMWARE_DIR: ${{ steps.output-path.outputs.firmware_dir }}
+          STAGING_DIR: ${{ steps.staging.outputs.path }}
+          EXPECTED_COUNT: ${{ needs.matrix.outputs.target_count }}
+          PUBLISH_MODE: ${{ needs.matrix.outputs.publish_mode }}
+        run: |
+          set -euo pipefail
+          python3 .zmk-workspace-tools/.github/scripts/install-firmware-tree.py install \
+            --workspace "$GITHUB_WORKSPACE" \
+            --firmware-folder "$FIRMWARE_FOLDER" \
+            --staging "$STAGING_DIR" \
+            --destination "$GITHUB_WORKSPACE/$FIRMWARE_DIR" \
+            --expected-count "$EXPECTED_COUNT" \
+            --mode "$PUBLISH_MODE"
+          echo "installed=true" >> "$GITHUB_OUTPUT"
+
       - name: 💾 Commit firmware
-        if: steps.firmware-files.outputs.has_files == 'true' && inputs.commit_firmware == true
+        if: steps.install.outputs.installed == 'true' && inputs.commit_firmware == true
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          file_pattern: ${{ inputs.firmware_folder }}/**/*
+          file_pattern: ${{ steps.output-path.outputs.firmware_root }}/**/*
           commit_message: Update firmware files for ${{ steps.output-path.outputs.repo }} ${{ steps.output-path.outputs.branch }}
           commit_options: --no-verify
           push_options: --no-verify
 
       - name: 🎁 Upload merged firmware
-        if: steps.firmware-files.outputs.has_files == 'true'
+        if: steps.install.outputs.installed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: firmware-${{ steps.output-path.outputs.safe_repo }}-${{ steps.output-path.outputs.safe_branch }}

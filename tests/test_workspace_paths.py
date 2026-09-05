@@ -21,7 +21,9 @@ class WorkspacePathsTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "tools").mkdir()
-        for file in ("just.sh", "tools/zmk-flash-log.sh"):
+        (self.root / "scripts").mkdir()
+        for file in ("just.sh", "tools/zmk-flash-log.sh",
+                     "scripts/workspace-safety.sh"):
             shutil.copy2(SOURCE / file, self.root / file)
         self.env = {
             key: value for key, value in os.environ.items()
@@ -131,6 +133,27 @@ class WorkspacePathsTest(unittest.TestCase):
         self.checkout.rename(moved)
         self.write_west(self.west_config, moved)
         self.assertEqual(self.run_script("firmware-dir").stdout.strip(), self.expected())
+
+    def test_root_manifest_resolves_to_repository_not_parent(self):
+        relative = os.path.relpath(self.checkout, self.west_config.parent.parent)
+        self.west_config.write_text(
+            f"[manifest]\npath = {relative}\nfile = west.yml\n"
+        )
+        self.assertEqual(self.run_script("firmware-dir").stdout.strip(), self.expected())
+
+    def test_parent_workspace_git_is_not_mistaken_for_config_repository(self):
+        subprocess.run(["git", "init", "-b", "workspace-main", str(self.root)],
+                       env=self.env, capture_output=True, check=True)
+        plain = self.root / "plain-config"
+        (plain / "config").mkdir(parents=True)
+        relative = os.path.relpath(plain / "config", self.west_config.parent.parent)
+        self.west_config.write_text(
+            f"[manifest]\npath = {relative}\nfile = west.yml\n"
+        )
+        (self.metadata / "config-name").unlink()
+        (self.metadata / "config-branch").unlink()
+        result = self.run_script("firmware-dir")
+        self.assertEqual(result.stdout.strip(), self.expected(self.profile, self.profile))
 
     def test_no_remote_uses_checkout_name(self):
         self.git("remote", "remove", "origin")

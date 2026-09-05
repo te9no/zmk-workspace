@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]$Uf2File,
 
     [Parameter(Mandatory=$false)]
@@ -83,7 +83,7 @@ function Test-IsUf2Loader {
     return $false
 }
 
-function Find-Uf2Drive {
+function Get-Uf2Drives {
     param([string]$DriveHint)
 
     $normalizedHint = ""
@@ -91,16 +91,27 @@ function Find-Uf2Drive {
         $normalizedHint = $DriveHint.Trim().TrimEnd(":").ToUpperInvariant()
     }
 
+    $matches = @()
     foreach ($drive in Get-PSDrive -PSProvider FileSystem) {
         if ($normalizedHint -and $drive.Name -ne $normalizedHint) {
             continue
         }
 
         if (Test-IsUf2Loader -DriveLetter $drive.Name) {
-            return $drive.Name
+            $matches += $drive.Name
         }
     }
+    return @($matches)
+}
 
+function Select-SingleUf2Drive {
+    param([string[]]$Candidates)
+
+    $items = @($Candidates)
+    if ($items.Count -gt 1) {
+        throw "Multiple UF2 loader drives found ($($items -join ', ')). Specify -DriveLetter."
+    }
+    if ($items.Count -eq 1) { return $items[0] }
     return ""
 }
 
@@ -202,12 +213,18 @@ function Invoke-BootloaderTrigger {
 function Wait-Uf2Drive {
     param(
         [string]$DriveHint,
-        [int]$TimeoutSeconds
+        [int]$TimeoutSeconds,
+        [string[]]$Baseline = @(),
+        [bool]$NewOnly = $false
     )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
-        $drive = Find-Uf2Drive -DriveHint $DriveHint
+        $candidates = @(Get-Uf2Drives -DriveHint $DriveHint)
+        if ($NewOnly) {
+            $candidates = @($candidates | Where-Object { $Baseline -notcontains $_ })
+        }
+        $drive = Select-SingleUf2Drive -Candidates $candidates
         if ($drive) {
             return $drive
         }
@@ -226,7 +243,7 @@ function Copy-Uf2 {
 
     $target = Join-Path ($DriveLetter + ":\") (Split-Path $SourceFile -Leaf)
     Write-Host "Copying firmware to ${DriveLetter}: ..."
-    Copy-Item -Path $SourceFile -Destination $target -Force
+    Copy-Item -LiteralPath $SourceFile -Destination $target -Force -ErrorAction Stop
     Write-Host "Firmware copy completed."
 }
 
@@ -310,13 +327,14 @@ function Capture-SerialLog {
     Write-Host "Log captured at $OutputPath"
 }
 
+function Invoke-ZmkFlashLogMain {
 $TriggerPort = Normalize-ComPort $TriggerPort
 $LogPort = Normalize-ComPort $LogPort
 if (-not $LogPort) {
     $LogPort = $TriggerPort
 }
 
-if (-not (Test-Path $Uf2File)) {
+if (-not (Test-Path -LiteralPath $Uf2File -PathType Leaf)) {
     throw "UF2 file not found: $Uf2File"
 }
 
@@ -337,8 +355,18 @@ if ($DiagnoseOnly) {
 }
 
 if (-not $SkipFlash) {
+    $beforeDrives = @(Get-Uf2Drives -DriveHint $DriveLetter)
     Invoke-BootloaderTrigger -Port $TriggerPort -BaudRate $BootloaderBaudRate -DelayMs $BootloaderDelayMs
-    $drive = Wait-Uf2Drive -DriveHint $DriveLetter -TimeoutSeconds $FlashTimeoutSeconds
+    if ($DriveLetter) {
+        $drive = Wait-Uf2Drive -DriveHint $DriveLetter -TimeoutSeconds $FlashTimeoutSeconds
+    } elseif ($TriggerPort) {
+        $drive = Wait-Uf2Drive -DriveHint "" -TimeoutSeconds $FlashTimeoutSeconds -Baseline $beforeDrives -NewOnly $true
+    } else {
+        $drive = Select-SingleUf2Drive -Candidates $beforeDrives
+        if (-not $drive) {
+            $drive = Wait-Uf2Drive -DriveHint "" -TimeoutSeconds $FlashTimeoutSeconds
+        }
+    }
     Write-Host "UF2 drive found: ${drive}:"
     Copy-Uf2 -DriveLetter $drive -SourceFile $Uf2File
 }
@@ -348,4 +376,9 @@ if (-not $SkipLog) {
         Start-Sleep -Milliseconds $PostFlashLogDelayMs
     }
     Capture-SerialLog -Port $LogPort -BaudRate $LogBaudRate -OutputPath $LogPath -Seconds $LogSeconds
+}
+}
+
+if ($MyInvocation.InvocationName -ne '.') {
+    Invoke-ZmkFlashLogMain
 }

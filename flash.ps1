@@ -1,10 +1,12 @@
 # Get command line arguments
 param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string]$Uf2File,
     [Parameter(Mandatory=$false)]
     [string]$DriveLetter = ""
 )
+
+$ErrorActionPreference = "Stop"
 
 # Check if the drive is a UF2 loader
 function Test-IsUf2Loader {
@@ -56,54 +58,77 @@ function Write-Firmware {
 
     Write-Host "Copying firmware to drive $TargetDrive..."
 
-    Copy-Item -Path $SourceFile -Destination $targetPath -Force
+    Copy-Item -LiteralPath $SourceFile -Destination $targetPath -Force -ErrorAction Stop
 
     Write-Host "Flash completed!"
 }
 
-# Check if the firmware file exists
-if (-not (Test-Path $Uf2File)) {
-    Write-Error "File '$Uf2File' not found."
-    exit 1
+function Select-SingleUf2Drive {
+    param(
+        [object[]]$Drives,
+        [string]$RequestedDrive = ""
+    )
+
+    $candidates = @($Drives | Where-Object {
+        (-not $RequestedDrive -or $_.Name -eq $RequestedDrive) -and
+        (Test-IsUf2Loader -DriveLetter $_.Name)
+    })
+    if ($candidates.Count -gt 1) {
+        $names = ($candidates | ForEach-Object { $_.Name }) -join ", "
+        throw "Multiple UF2 loaders found ($names). Specify -DriveLetter."
+    }
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+    return $null
 }
 
-Write-Host "Firmware file: $Uf2File"
-if ($DriveLetter) {
-    $DriveLetter = $DriveLetter.Trim().TrimEnd(":").ToUpper()
-    Write-Host "Target drive hint: $DriveLetter"
-}
+function Invoke-Uf2Flash {
+    param([string]$FirmwareFile, [string]$RequestedDrive = "")
+
+    if (-not $FirmwareFile -or -not (Test-Path -LiteralPath $FirmwareFile -PathType Leaf)) {
+        throw "File '$FirmwareFile' not found or is not a regular file."
+    }
+
+    Write-Host "Firmware file: $FirmwareFile"
+    if ($RequestedDrive) {
+        $RequestedDrive = $RequestedDrive.Trim().TrimEnd(":").ToUpper()
+        Write-Host "Target drive hint: $RequestedDrive"
+    }
 
 # Check if there is a UF2 loader in the existing drives
 Write-Host "Checking existing drives for UF2 loader..."
-$initialDrives = Get-PSDrive -PSProvider FileSystem
-
-foreach ($drive in $initialDrives) {
-    if ($DriveLetter -and $drive.Name -ne $DriveLetter) {
-        continue
+    $initialDrives = @(Get-PSDrive -PSProvider FileSystem)
+    $existing = Select-SingleUf2Drive -Drives $initialDrives -RequestedDrive $RequestedDrive
+    if ($existing) {
+        Write-Host "UF2 loader found on drive $($existing.Name)"
+        Write-Firmware -TargetDrive $existing.Name -SourceFile $FirmwareFile
+        return 0
     }
-    if (Test-IsUf2Loader -DriveLetter $drive.Name) {
-        Write-Host "UF2 loader found on drive $($drive.Name)"
-        Write-Firmware -TargetDrive $drive.Name -SourceFile $Uf2File
-        exit 0
-    }
-}
 
 Write-Host "No UF2 loader found in existing drives."
 Write-Host "Waiting for new UF2 loader drive... (Press 'q' to cancel)"
 
-try {
     while ($true) {
         # Check if a key is pressed
         if ([Console]::KeyAvailable) {
             $key = [Console]::ReadKey($true)
             if ($key.KeyChar -eq 'q' -or $key.KeyChar -eq 'Q') {
                 Write-Host "`nCancelled."
-                exit 0
+                return 130
             }
         }
 
         Start-Sleep -Milliseconds 100
-        $currentDrives = Get-PSDrive -PSProvider FileSystem
+        $currentDrives = @(Get-PSDrive -PSProvider FileSystem)
+
+        if ($RequestedDrive) {
+            $requestedLoader = Select-SingleUf2Drive -Drives $currentDrives -RequestedDrive $RequestedDrive
+            if ($requestedLoader) {
+                Write-Host "UF2 loader detected on drive $($requestedLoader.Name)"
+                Write-Firmware -TargetDrive $requestedLoader.Name -SourceFile $FirmwareFile
+                return 0
+            }
+            continue
+        }
 
         # Detect new drives
         $newDrives = $currentDrives | Where-Object {
@@ -111,29 +136,27 @@ try {
             -not ($initialDrives | Where-Object { $_.Name -eq $drive.Name })
         }
 
-        if ($newDrives) {
-            foreach ($newDrive in $newDrives) {
-                Write-Host "New drive detected: $($newDrive.Name)"
-                if ($DriveLetter -and $newDrive.Name -ne $DriveLetter) {
-                    Write-Host "Drive $($newDrive.Name) does not match target $DriveLetter, skipping..."
-                    continue
-                }
-
-                if (Test-IsUf2Loader -DriveLetter $newDrive.Name) {
-                    Write-Host "UF2 loader detected on drive $($newDrive.Name)"
-                    Write-Firmware -TargetDrive $newDrive.Name -SourceFile $Uf2File
-                    exit 0
-                } else {
-                    Write-Host "Drive $($newDrive.Name) is not a UF2 loader, skipping..."
-                }
+        if (@($newDrives).Count -gt 0) {
+            $newLoader = Select-SingleUf2Drive -Drives @($newDrives) -RequestedDrive $RequestedDrive
+            if ($newLoader) {
+                Write-Host "UF2 loader detected on drive $($newLoader.Name)"
+                Write-Firmware -TargetDrive $newLoader.Name -SourceFile $FirmwareFile
+                return 0
             }
 
-            # New drive added, update the initial drive list
-            $initialDrives = $currentDrives
+            # Keep the startup baseline fixed so a newly mounted drive is
+            # rechecked if its UF2 marker appears slightly later.
         }
     }
 }
-catch {
-    Write-Error "An error occurred: $_"
-    exit 1
+
+if ($MyInvocation.InvocationName -ne '.') {
+    try {
+        $exitCode = Invoke-Uf2Flash -FirmwareFile $Uf2File -RequestedDrive $DriveLetter
+        exit ([int]$exitCode)
+    }
+    catch {
+        Write-Error "An error occurred: $_"
+        exit 1
+    }
 }

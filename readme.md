@@ -68,6 +68,9 @@ ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all
    ```sh
    ./just.sh init config/zmk-config-your-keyboard
    ```
+   If both `west.yml` and `config/west.yml` exist in that repository, the
+   standard `config/west.yml` manifest is preferred. Pass a specific
+   `west.yml` file path only when you intentionally want the root manifest.
    Or if you prefer to treat zmk-workspace as the root of your zmk-config,
    ```sh
    ./just.sh init config
@@ -85,6 +88,17 @@ ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all
    ```sh
    ./just.sh flash [target] -r
    ```
+   The flash expression must identify exactly one build target. If more than
+   one target or UF2 device matches, the command stops and lists the choices.
+   Select a device explicitly when needed:
+   ```sh
+   ./just.sh flash [target] --drive E   # Windows/WSL
+   ./just.sh flash [target] --mount RPI-RP2  # macOS
+   ```
+
+   `clean` and `clean-all` only remove generated directories inside the active
+   managed profile (plus that profile's firmware output). Unsafe path
+   overrides are rejected before the build container starts.
 
    On Windows/WSL, boards that include a 1200-baud CDC ACM bootloader trigger can also be flashed and logged in one loop:
    ```sh
@@ -181,7 +195,7 @@ ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all
          max_parallel: 4
    ```
 
-   The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, uploads each successful firmware artifact, and optionally commits merged firmware files under `firmware/<safe-repository-name>/<safe-branch-name>/`.
+   The reusable workflow reads `build.yaml`, composes a matrix, prepares a west workspace, restores west and ccache caches, builds each target, and uploads build artifacts. It updates or commits the canonical files under `firmware/<safe-repository-name>/<safe-branch-name>/` only after every selected target succeeds and the complete selected artifact set is verified. An `all` build replaces the complete tree; a filtered build updates only the selected firmware and preserves unselected files.
 
    When `update_build_health` is enabled, the workflow also writes build health files under `badges/build-health/<safe-repository-name>/<safe-branch-name>/`:
 
@@ -189,11 +203,9 @@ ZMK_TARGET_JOBS=3 CMAKE_BUILD_PARALLEL_LEVEL=4 ./just.sh build-fast all
    - `build-health.json`
    - `shields.json`
 
-   A README badge can reference the committed SVG:
-
-   ```md
-   ![build health](badges/build-health/zmk-config-your-keyboard/main/build-health.svg)
-   ```
+   These badge files are uploaded as the `build-health-badge` workflow
+   artifact; this workflow does not commit them. Download or publish that
+   artifact from a separate deployment job before linking it from a README.
 
 11. Use the reusable build health badge workflow directly
 
@@ -306,7 +318,7 @@ Then use `Tab` after `./just.sh`, for example:
 To enable it automatically in Bash, add this to `~/.bashrc`:
 
 ```sh
-source /home/owner/zmk-workspace2/zmk-workspace/_just_completion.bash
+source /absolute/path/to/zmk-workspace/_just_completion.bash
 ```
 
 The completion works with `./just.sh` on WSL. If `fzf` is installed on the host, target/config selection uses an interactive picker; otherwise it falls back to normal Bash completion candidates.

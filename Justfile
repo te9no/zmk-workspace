@@ -27,8 +27,18 @@ zmk_config_root := absolute_path(`
 
   path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
   file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-  west_yml_path="$west_top/${path:-.}/${file}"
-  printf '%s/..\n' "$(dirname "$west_yml_path")"
+  west_yml_path="$west_top/${path:-.}/${file:-west.yml}"
+  manifest_dir="$(dirname "$west_yml_path")"
+  manifest_git_root="$(git -C "$manifest_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  manifest_dir_abs="$(realpath -m "$manifest_dir")"
+  manifest_git_root_abs="$(realpath -m "${manifest_git_root:-/nonexistent}")"
+  if [ -n "$manifest_git_root" ] && { [ "$manifest_dir_abs" = "$manifest_git_root_abs" ] || [ "$manifest_dir_abs" = "$manifest_git_root_abs/config" ]; }; then
+    printf '%s\n' "$manifest_git_root"
+  elif [ "$(basename "$manifest_dir")" = config ]; then
+    printf '%s/..\n' "$manifest_dir"
+  else
+    printf '%s\n' "$manifest_dir"
+  fi
 `)
 zmk_config_name := `
   if [ -n "${ZMK_CONFIG_NAME:-}" ]; then
@@ -47,7 +57,17 @@ zmk_config_name := `
     fi
     path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
     file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-    config_root="$(dirname "$west_workspace/${path:-.}/$file")/.."
+    manifest_dir="$(dirname "$west_workspace/${path:-.}/${file:-west.yml}")"
+    manifest_git_root="$(git -C "$manifest_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    manifest_dir_abs="$(realpath -m "$manifest_dir")"
+    manifest_git_root_abs="$(realpath -m "${manifest_git_root:-/nonexistent}")"
+    if [ -n "$manifest_git_root" ] && { [ "$manifest_dir_abs" = "$manifest_git_root_abs" ] || [ "$manifest_dir_abs" = "$manifest_git_root_abs/config" ]; }; then
+      config_root="$manifest_git_root"
+    elif [ "$(basename "$manifest_dir")" = config ]; then
+      config_root="$manifest_dir/.."
+    else
+      config_root="$manifest_dir"
+    fi
   fi
   config_root="$(realpath -m "$config_root")"
   git_root=$(git -C "$config_root" rev-parse --show-toplevel 2>/dev/null || true)
@@ -75,7 +95,17 @@ zmk_config_branch := `
     fi
     path=$(awk -F ' *= *' '/^ *path/ {print $2}' "$west_config")
     file=$(awk -F ' *= *' '/^ *file/ {print $2}' "$west_config")
-    config_root="$(dirname "$west_workspace/${path:-.}/$file")/.."
+    manifest_dir="$(dirname "$west_workspace/${path:-.}/${file:-west.yml}")"
+    manifest_git_root="$(git -C "$manifest_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    manifest_dir_abs="$(realpath -m "$manifest_dir")"
+    manifest_git_root_abs="$(realpath -m "${manifest_git_root:-/nonexistent}")"
+    if [ -n "$manifest_git_root" ] && { [ "$manifest_dir_abs" = "$manifest_git_root_abs" ] || [ "$manifest_dir_abs" = "$manifest_git_root_abs/config" ]; }; then
+      config_root="$manifest_git_root"
+    elif [ "$(basename "$manifest_dir")" = config ]; then
+      config_root="$manifest_dir/.."
+    else
+      config_root="$manifest_dir"
+    fi
   fi
   config_root="$(realpath -m "$config_root")"
 
@@ -105,14 +135,37 @@ _parse_targets $expr:
         exec just _container _parse_targets "{{ expr }}"
     fi
 
-    attrs="[.board, .shield, .snippet, .\"artifact-name\"]"
-    filter="(($attrs | map(. // [.]) | combinations), ((.include // {})[] | $attrs)) | join(\",\")"
-    echo "$(yq -r "$filter" "{{ zmk_config_root }}/build.yaml" | grep -v "^," | grep -i "${expr/#all/.*}")"
+    python3 "{{ justfile_directory() }}/scripts/build_targets.py" \
+        "{{ zmk_config_root }}/build.yaml" "{{ expr }}" --format csv
 
-# build firmware for single board & shield combination
-_build_single $board $shield $snippet $artifact *west_args:
+# structured target stream for internal build logic
+_parse_targets_json $expr:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ "${IN_ZMK_CONTAINER:-0}" != "1" ]]; then
+        exec just _container _parse_targets_json "{{ expr }}"
+    fi
+
+    python3 "{{ justfile_directory() }}/scripts/build_targets.py" \
+        "{{ zmk_config_root }}/build.yaml" "{{ expr }}" --format jsonl
+
+# build firmware for single board & shield combination
+_build_single $target_json *west_args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    target_json={{ quote(target_json) }}
+    target_fields_file="$(mktemp)"
+    target_cmake_file="$(mktemp)"
+    trap 'rm -f -- "$target_fields_file" "$target_cmake_file"' EXIT
+    python3 -c 'import json, sys; d=json.loads(sys.argv[1]); open(sys.argv[2], "wb").write(b"\0".join(str(d.get(k, "")).encode() for k in ("board", "shield", "snippet", "artifact-name")) + b"\0"); open(sys.argv[3], "wb").write(b"\0".join(str(x).encode() for x in d.get("cmake-argv", [])) + (b"\0" if d.get("cmake-argv") else b""))' \
+        "$target_json" "$target_fields_file" "$target_cmake_file"
+    mapfile -d '' target_fields < "$target_fields_file"
+    board="${target_fields[0]}"
+    shield="${target_fields[1]}"
+    snippet="${target_fields[2]}"
+    artifact="${target_fields[3]}"
+    target_cmake_args=()
+    mapfile -d '' target_cmake_args < "$target_cmake_file"
     artifact="${artifact:-${shield:+${shield// /+}-}${board}}"
     echo "::zmk-build-start::${artifact}"
 
@@ -122,35 +175,46 @@ _build_single $board $shield $snippet $artifact *west_args:
     echo "Building firmware for $artifact..."
 
     signature_file="$build_dir/.zmk-workspace-config"
-    build_signature="$(printf 'version=1\nboard=%s\nshield=%s\nsnippet=%s\nconfig=%s\n' \
-        "$board" "$shield" "$snippet" "{{ zmk_config_root }}")"
+    west_extra_args=({{ west_args }})
+    cmake_args=(
+        -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake"
+        -DZMK_CONFIG="{{ zmk_config_root }}/config"
+    )
+    if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
+        cmake_args+=(-DZMK_EXTRA_MODULES="{{ zmk_config_root }}")
+    fi
+    if [[ -n "$shield" ]]; then
+        cmake_args+=(-DSHIELD="$shield")
+    fi
+    build_signature="$({
+        printf 'version=2\nboard=%s\nshield=%s\nsnippet=%s\nartifact=%s\nconfig=%s\nwest=%s\n' \
+            "$board" "$shield" "$snippet" "$artifact" \
+            "$(realpath -m '{{ zmk_config_root }}')" "$(realpath -m '{{ west_workspace }}')"
+        printf 'cmake_arg=%q\n' "${cmake_args[@]}" "${target_cmake_args[@]}"
+        printf 'west_arg=%q\n' "${west_extra_args[@]}"
+    })"
 
     # Supplying CMake arguments to `west build` forces a configure on every run.
     # That refreshes generated headers and causes a large, unnecessary rebuild.
     # Existing build trees can safely let Ninja regenerate CMake only when an
     # actual dependency changes.
-    west_extra_args=({{ west_args }})
     if [[ -f "$build_dir/build.ninja" && ${#west_extra_args[@]} -eq 0 ]] && \
         cmp -s <(printf '%s\n' "$build_signature") "$signature_file"; then
         cmake --build "$build_dir"
     else
-        cmake_args=(
-            -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake"
-            -DZMK_CONFIG="{{ zmk_config_root }}/config"
-        )
-        if [[ -f "{{ zmk_config_root }}/zephyr/module.yml" ]]; then
-            cmake_args+=(-DZMK_EXTRA_MODULES="{{ zmk_config_root }}")
+        pristine_args=(-p auto)
+        if [[ -f "$build_dir/build.ninja" ]] && ! cmp -s <(printf '%s\n' "$build_signature") "$signature_file"; then
+            pristine_args=(-p always)
+            for arg in "${west_extra_args[@]}"; do
+                [[ "$arg" == -p || "$arg" == --pristine || "$arg" == -p=* || "$arg" == --pristine=* ]] && pristine_args=()
+            done
         fi
-        if [[ -n "$shield" ]]; then
-            cmake_args+=(-DSHIELD="$shield")
-        fi
-
         (
             cd "{{ west_workspace }}"
-            west build -p auto -s zmk/app -d "$build_dir" -b "$board" \
-                "${west_extra_args[@]}" ${snippet:+-S "$snippet"} -- "${cmake_args[@]}"
+            west build "${pristine_args[@]}" -s zmk/app -d "$build_dir" -b "$board" \
+                "${west_extra_args[@]}" ${snippet:+-S "$snippet"} -- \
+                "${cmake_args[@]}" "${target_cmake_args[@]}"
         )
-        printf '%s\n' "$build_signature" > "$signature_file"
     fi
 
     if [[ -f "$build_dir/zephyr/zmk.uf2" ]]; then
@@ -158,6 +222,7 @@ _build_single $board $shield $snippet $artifact *west_args:
     else
         mkdir -p "{{ out }}" && cp "$build_dir/zephyr/zmk.bin" "{{ out }}/$artifact_fs.bin"
     fi
+    printf '%s\n' "$build_signature" > "$signature_file"
     echo "::zmk-build-done::${artifact}"
 
 # build firmware for matching targets
@@ -168,12 +233,12 @@ build expr *west_args:
         exec just _container build "{{ expr }}" {{ west_args }}
     fi
 
-    targets="$(just _parse_targets {{ expr }})"
+    targets="$(just _parse_targets_json {{ expr }})"
     [[ -z "$targets" ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
 
-    while IFS=, read -r board shield snippet artifact; do
-        [[ -z "${board:-}" ]] && continue
-        just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }}
+    while IFS= read -r target_json; do
+        [[ -z "$target_json" ]] && continue
+        just _build_single "$target_json" {{ west_args }}
     done <<< "$targets"
 
 # build matching targets with automatically tuned target/compiler parallelism
@@ -215,7 +280,7 @@ build-parallel expr jobs *west_args:
         exit 2
     fi
 
-    targets="$(just _parse_targets {{ expr }})"
+    targets="$(just _parse_targets_json {{ expr }})"
     [[ -z "$targets" ]] && echo "No matching targets found. Aborting..." >&2 && exit 1
 
     # Avoid multiplying target-level parallelism by full per-target CMake parallelism.
@@ -226,7 +291,7 @@ build-parallel expr jobs *west_args:
     status_dir="$log_dir/status"
     mkdir -p "$status_dir"
 
-    total="$(printf '%s\n' "$targets" | grep -c '^[^,]')"
+    total="$(printf '%s\n' "$targets" | grep -c '^{')"
 
     count_status() {
         find "$status_dir" -type f -name "*.$1" 2>/dev/null | wc -l | tr -d ' '
@@ -264,8 +329,16 @@ build-parallel expr jobs *west_args:
     print_progress
 
     status=0
-    while IFS=, read -r board shield snippet artifact; do
-        [[ -z "${board:-}" ]] && continue
+    while IFS= read -r target_json; do
+        [[ -z "$target_json" ]] && continue
+        mapfile -d '' target_fields < <(
+            python3 -c 'import json, sys; d=json.loads(sys.argv[1]); [sys.stdout.buffer.write(str(d.get(k, "")).encode() + b"\0") for k in ("board", "shield", "snippet", "artifact-name")]' \
+                "$target_json"
+        )
+        board="${target_fields[0]}"
+        shield="${target_fields[1]}"
+        snippet="${target_fields[2]}"
+        artifact="${target_fields[3]}"
         artifact_name="${artifact:-${shield:+${shield// /+}-}${board}}"
         artifact_fs="${artifact_name//\//-}"
         log_file="$log_dir/${artifact_fs}.log"
@@ -278,7 +351,7 @@ build-parallel expr jobs *west_args:
             printf 'board=%s\nshield=%s\nsnippet=%s\nartifact=%s\n\n' \
                 "$board" "$shield" "$snippet" "$artifact" > "$log_file"
             touch "$running_file"
-            if just _build_single "$board" "$shield" "$snippet" "$artifact" {{ west_args }} >> "$log_file" 2>&1; then
+            if just _build_single "$target_json" {{ west_args }} >> "$log_file" 2>&1; then
                 rm -f "$running_file"
                 touch "$done_file"
             else
@@ -317,7 +390,19 @@ build-parallel expr jobs *west_args:
 
 # clear build cache and artifacts
 clean:
-    rm -rf {{ build }} {{ out }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{ justfile_directory() }}/scripts/workspace-safety.sh"
+    profile={{ quote(work_profile) }}
+    zmk_validate_profile "$profile"
+    workspace="$(realpath -m '{{ justfile_directory() }}')"
+    safe_work="$(zmk_require_symlink_free_within "{{ work_root }}" "$workspace" "work root")"
+    expected_profile="$(zmk_require_safe_child "$safe_work/profiles/$profile" "$safe_work" "profile root")"
+    [[ "$(realpath -ms '{{ profile_root }}')" == "$expected_profile" ]] || { echo "Refusing unexpected profile root." >&2; exit 2; }
+    safe_build="$(zmk_require_safe_child "{{ build }}" "$expected_profile" "build root")"
+    firmware_root="$(zmk_require_safe_child "$workspace/firmware" "$workspace" "firmware root")"
+    safe_out="$(zmk_require_safe_child "{{ out }}" "$firmware_root" "firmware output")"
+    rm -rf -- "$safe_build" "$safe_out"
 
 # show ccache statistics
 ccache-stats *args:
@@ -340,21 +425,39 @@ clean-ccache:
     ccache -C
 
 # clear all automatically generated files
-clean-all: clean
+clean-all:
     #!/usr/bin/env bash
     set -euo pipefail
+
+    source "{{ justfile_directory() }}/scripts/workspace-safety.sh"
+    profile={{ quote(work_profile) }}
+    zmk_validate_profile "$profile"
+    workspace="$(realpath -m '{{ justfile_directory() }}')"
+    safe_work="$(zmk_require_symlink_free_within "{{ work_root }}" "$workspace" "work root")"
+    expected_profile="$(zmk_require_safe_child "$safe_work/profiles/$profile" "$safe_work" "profile root")"
+    [[ "$(realpath -ms '{{ profile_root }}')" == "$expected_profile" ]] || { echo "Refusing unexpected profile root." >&2; exit 2; }
+    safe_build="$(zmk_require_safe_child "{{ build }}" "$expected_profile" "build root")"
+    safe_west="$(zmk_require_safe_child "{{ west_workspace }}" "$expected_profile" "west workspace")"
+    firmware_root="$(zmk_require_safe_child "$workspace/firmware" "$workspace" "firmware root")"
+    safe_out="$(zmk_require_safe_child "{{ out }}" "$firmware_root" "firmware output")"
 
     generated=()
     if [[ -d .west ]]; then
         while IFS= read -r path; do
             case "$path" in
-                "$(pwd)/config"| "$(pwd)/config/"*) ;;
-                "$(pwd)"/*) generated+=("$path") ;;
+                "$workspace/config"| "$workspace/config/"*) ;;
+                "$workspace"/*) generated+=("$(zmk_require_untracked_child "$path" "$workspace" "west project")") ;;
+                *) echo "Refusing west project outside workspace: $path" >&2; exit 2 ;;
             esac
         done < <(WEST_TOPDIR="$(pwd)" west list -f '{abspath}' 2>/dev/null || true)
     fi
 
-    rm -rf .west "{{ west_workspace }}" zmk zephyr modules "${generated[@]}"
+    fixed_generated=()
+    for path in "$workspace/.west" "$workspace/zmk" "$workspace/zephyr" "$workspace/modules"; do
+        fixed_generated+=("$(zmk_require_untracked_child "$path" "$workspace" "generated workspace path")")
+    done
+
+    rm -rf -- "$safe_build" "$safe_out" "$safe_west" "${fixed_generated[@]}" "${generated[@]}"
 
 # clear nix cache
 clean-nix:
@@ -388,11 +491,17 @@ init *config_path:
         fi
     fi
 
-    # Determine west.yml path
-    if [[ -f "$config_path/west.yml" ]]; then
+    # Prefer the standard nested manifest when both it and a root helper
+    # manifest exist. A manifest file can still be selected explicitly.
+    if [[ -f "$config_path" ]]; then
+        west_yml_abs="$config_path"
+    elif [[ -f "$config_path/config/west.yml" ]]; then
+        west_yml_abs="$config_path/config/west.yml"
+    elif [[ -f "$config_path/west.yml" ]]; then
         west_yml_abs="$config_path/west.yml"
     else
-        west_yml_abs="$config_path/config/west.yml"
+        echo "No west.yml found under '$config_path'." >&2
+        exit 2
     fi
 
     # Keep the manifest in config/, even when the west workspace is nested under
@@ -575,29 +684,54 @@ flash expr *args:
 
     # Check if -r option is provided
     rebuild=false
+    target_mount="${FLASH_TARGET_MOUNT:-}"
+    target_drive="${FLASH_TARGET_DRIVE:-}"
     build_args=()
-    for arg in {{ args }}; do
-        if [[ "$arg" == "-r" ]]; then
-            rebuild=true
-        else
-            build_args+=("$arg")
-        fi
+    set -- {{ args }}
+    while (( $# > 0 )); do
+        case "$1" in
+            -r) rebuild=true; shift ;;
+            --mount)
+                (( $# >= 2 )) || { echo "--mount requires a value." >&2; exit 2; }
+                target_mount="$2"; shift 2 ;;
+            --drive)
+                (( $# >= 2 )) || { echo "--drive requires a value." >&2; exit 2; }
+                target_drive="$2"; shift 2 ;;
+            *) build_args+=("$1"); shift ;;
+        esac
     done
 
-    # Rebuild if -r option was provided
+    targets_output="$(just _parse_targets_json {{ expr }})"
+    targets=()
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] || targets+=("$candidate")
+    done <<< "$targets_output"
+    if (( ${#targets[@]} == 0 )); then
+        echo "No matching targets found for expression '{{ expr }}'. Aborting..." >&2
+        exit 1
+    fi
+    if (( ${#targets[@]} != 1 )); then
+        echo "Expression '{{ expr }}' matches multiple targets; choose one of:" >&2
+        for candidate in "${targets[@]}"; do
+            python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("  " + ", ".join(f"{k}={d[k]}" for k in ("artifact-name", "board", "shield", "snippet", "cmake-args") if d.get(k)))' "$candidate" >&2
+        done
+        exit 2
+    fi
+    target="${targets[0]}"
+
+    # Rebuild only after the flash expression has proved unique.
     if [[ "$rebuild" == "true" ]]; then
         echo "Rebuilding before flashing..."
         just build "{{ expr }}" "${build_args[@]}"
     fi
 
-    target=$(just _parse_targets {{ expr }} | head -n 1)
-
-    if [[ -z "$target" ]]; then
-        echo "No matching targets found for expression '{{ expr }}'. Aborting..." >&2
-        exit 1
-    fi
-
-    IFS=, read -r board shield snippet artifact <<< "$target"
+    mapfile -d '' target_fields < <(
+        python3 -c 'import json, sys; d=json.loads(sys.argv[1]); [sys.stdout.buffer.write(str(d.get(k, "")).encode() + b"\0") for k in ("board", "shield", "snippet", "artifact-name")]' "$target"
+    )
+    board="${target_fields[0]}"
+    shield="${target_fields[1]}"
+    snippet="${target_fields[2]}"
+    artifact="${target_fields[3]}"
     # Use artifact-name if specified, otherwise construct from shield and board
     if [[ -n "$artifact" ]]; then
         artifact_name="$artifact"
@@ -615,19 +749,21 @@ flash expr *args:
 
     # macOS
     if [[ "$OSTYPE" == "darwin"* ]]; then
+        [[ -z "$target_drive" ]] || { echo "--drive is only valid on Windows/WSL." >&2; exit 2; }
         echo "Flashing '$uf2_path'..."
-        if [[ -n "${FLASH_TARGET_MOUNT:-}" ]]; then
-            ./flash.sh "$uf2_path" "${FLASH_TARGET_MOUNT}"
+        if [[ -n "$target_mount" ]]; then
+            ./flash.sh "$uf2_path" "$target_mount"
         else
             ./flash.sh "$uf2_path"
         fi
     # WSL
     elif grep -q -i "Microsoft" /proc/version; then
+        [[ -z "$target_mount" ]] || { echo "--mount is only valid on macOS." >&2; exit 2; }
         echo "Flashing '$uf2_path'..."
-        if [[ -n "${FLASH_TARGET_DRIVE:-}" ]]; then
-            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w $uf2_path)" -DriveLetter "${FLASH_TARGET_DRIVE}"
+        if [[ -n "$target_drive" ]]; then
+            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w "$uf2_path")" -DriveLetter "$target_drive"
         else
-            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w $uf2_path)"
+            powershell.exe -ExecutionPolicy Bypass -File flash.ps1 -Uf2File "$(wslpath -w "$uf2_path")"
         fi
     # Other: Not supported
     else

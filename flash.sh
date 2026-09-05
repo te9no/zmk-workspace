@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
 #==============================================================================
 # UF2 Flasher for macOS
@@ -8,13 +9,14 @@
 #==============================================================================
 
 # Expect the full path to the UF2 file as the first argument
-if [ -z "$1" ]; then
+if [ -z "${1:-}" ]; then
     echo "Usage: $0 <path_to_uf2_file> [target_mount_or_volume_name]"
     exit 1
 fi
 
 UF2_FILE="$1"
 TARGET_HINT="${2:-}"
+MOUNT_ROOT="${ZMK_FLASH_MOUNT_ROOT:-/Volumes}"
 
 # Check if the firmware file exists
 if [ ! -f "$UF2_FILE" ]; then
@@ -33,10 +35,10 @@ resolve_target_mount() {
         return 1
     fi
 
-    if [[ "$hint" == /Volumes/* ]]; then
+    if [[ "$hint" == "$MOUNT_ROOT"/* ]]; then
         printf '%s\n' "$hint"
     else
-        printf '/Volumes/%s\n' "$hint"
+        printf '%s/%s\n' "$MOUNT_ROOT" "$hint"
     fi
 }
 
@@ -66,17 +68,34 @@ write_firmware() {
     local source_file="$2"
     echo "Copying firmware to drive at \"${target_mount_point}\"..."
     # Use COPYFILE_DISABLE to avoid copying extended attributes, which causes errors on FAT32/UF2 drives
-    COPYFILE_DISABLE=1 cp "$source_file" "${target_mount_point}/"
-    if [ $? -eq 0 ]; then
+    if COPYFILE_DISABLE=1 cp -- "$source_file" "${target_mount_point}/"; then
         echo "Flash completed!"
         sleep 2
     else
-        echo "Error: Failed to copy firmware."
-        exit 1
+        echo "Error: Failed to copy firmware." >&2
+        return 1
     fi
 }
 
-trap 'echo -e "\nCancelled by user."; exit 0' INT
+collect_uf2_mounts() {
+    local drive_path
+    for drive_path in "$MOUNT_ROOT"/*; do
+        [ -e "$drive_path" ] || continue
+        if is_uf2_loader "$drive_path"; then
+            printf '%s\n' "$drive_path"
+        fi
+    done
+}
+
+reject_ambiguous_mounts() {
+    if (( $# > 1 )); then
+        echo "Multiple UF2 loaders found; specify a target mount:" >&2
+        printf '  %s\n' "$@" >&2
+        return 2
+    fi
+}
+
+trap 'echo -e "\nCancelled by user."; exit 130' INT
 
 # First, check already mounted drives
 echo "Checking existing drives for UF2 loader..."
@@ -88,37 +107,40 @@ if [ -n "$TARGET_HINT" ]; then
         exit 0
     fi
 else
-    for drive_path in /Volumes/*; do
-        [ -e "$drive_path" ] || continue
-        if is_uf2_loader "$drive_path"; then
-            echo "UF2 loader found at \"$drive_path\""
-            write_firmware "$drive_path" "$UF2_FILE"
-            exit 0
-        fi
-    done
+    existing_loaders=()
+    while IFS= read -r loader; do
+        [[ -z "$loader" ]] || existing_loaders+=("$loader")
+    done < <(collect_uf2_mounts)
+    reject_ambiguous_mounts "${existing_loaders[@]}"
+    if (( ${#existing_loaders[@]} == 1 )); then
+        echo "UF2 loader found at \"${existing_loaders[0]}\""
+        write_firmware "${existing_loaders[0]}" "$UF2_FILE"
+        exit 0
+    fi
 fi
 
 # If not found, wait for a new drive to be connected
 echo "No UF2 loader found. Waiting for new drive... (Press 'q' to cancel)"
-before_drives_str=$(find /Volumes -maxdepth 1 -mindepth 1 -exec basename {} \;)
+before_drives_str=$(find "$MOUNT_ROOT" -maxdepth 1 -mindepth 1 -exec basename {} \;)
 
 while true; do
     # Check for 'q' key press (non-blocking)
     if read -t 1 -n 1 key 2>/dev/null; then
         if [[ "$key" == "q" ]]; then
             echo -e "\nCancelled by user."
-            exit 0
+            exit 130
         fi
     fi
 
-    after_drives_str=$(find /Volumes -maxdepth 1 -mindepth 1 -exec basename {} \;)
+    after_drives_str=$(find "$MOUNT_ROOT" -maxdepth 1 -mindepth 1 -exec basename {} \;)
     new_drive_names=$(comm -13 <(echo "$before_drives_str" | sort) <(echo "$after_drives_str" | sort))
 
     if [ -n "$new_drive_names" ]; then
+        new_loaders=()
         while IFS= read -r drive; do
             [ -z "$drive" ] && continue
             echo "New drive detected: \"$drive\""
-            mount_point="/Volumes/${drive}"
+            mount_point="$MOUNT_ROOT/${drive}"
             if [ -n "$TARGET_HINT" ]; then
                 target_mount="$(resolve_target_mount "$TARGET_HINT")"
                 if [ "$mount_point" != "$target_mount" ]; then
@@ -129,13 +151,17 @@ while true; do
             sleep 1
 
             if is_uf2_loader "$mount_point"; then
-                echo "UF2 loader detected at \"$mount_point\""
-                write_firmware "$mount_point" "$UF2_FILE"
-                exit 0
+                new_loaders+=("$mount_point")
             else
                 echo "Drive \"$drive\" is not a UF2 loader, skipping..."
             fi
         done <<< "$new_drive_names"
+        reject_ambiguous_mounts "${new_loaders[@]}"
+        if (( ${#new_loaders[@]} == 1 )); then
+            echo "UF2 loader detected at \"${new_loaders[0]}\""
+            write_firmware "${new_loaders[0]}" "$UF2_FILE"
+            exit 0
+        fi
     fi
     before_drives_str=$after_drives_str
 done

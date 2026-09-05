@@ -97,7 +97,6 @@ jobs:
           fi
 
           mkdir -p "${{ inputs.output_folder }}"
-          artifacts=()
           found=0
           error_occurred=0
 
@@ -114,7 +113,7 @@ jobs:
 
             echo "INFO: drawing $keyboard from $dtsi_file"
             if python3 "$script" "$dtsi_file" "${{ inputs.output_folder }}/$keyboard.svg" --layout "layout_$keyboard" --keymap "$keymap"; then
-              artifacts+=("${{ inputs.output_folder }}/$keyboard.svg")
+              echo "INFO: wrote ${{ inputs.output_folder }}/$keyboard.svg"
             else
               echo "ERROR: drawing failed for $keyboard" >&2
               error_occurred=1
@@ -126,21 +125,18 @@ jobs:
             error_occurred=1
           fi
 
-          joined_artifacts=$(printf '"%s", ' "${artifacts[@]}")
-          printf 'artifacts=[%s]\n' "${joined_artifacts%, }" >> "$GITHUB_OUTPUT"
-
           if [[ "$error_occurred" -eq 1 ]]; then
             exit 1
           fi
 
       - name: Get last commit message
         id: last_commit_message
-        if: inputs.amend_commit == true && (inputs.destination == 'commit' || inputs.destination == 'both')
+        if: steps.draw.outcome == 'success' && inputs.amend_commit == true && (inputs.destination == 'commit' || inputs.destination == 'both')
         shell: bash
         run: echo "msg=$(git log -1 --pretty=%s)" >> "$GITHUB_OUTPUT"
 
       - name: Commit keymap SVGs
-        if: inputs.destination == 'commit' || inputs.destination == 'both'
+        if: steps.draw.outcome == 'success' && (inputs.destination == 'commit' || inputs.destination == 'both')
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           file_pattern: '${{ inputs.output_folder }}/*.svg'
@@ -151,19 +147,15 @@ jobs:
 
       - name: Artifact upload
         id: artifact-upload-step
-        if: inputs.destination == 'artifact' || inputs.destination == 'both'
+        if: ${{ always() && (inputs.destination == 'artifact' || inputs.destination == 'both') && (steps.draw.outcome == 'success' || !inputs.fail_on_error) }}
         uses: actions/upload-artifact@v4
         with:
           name: '${{ inputs.artifact_name }}'
-          path: |
-            ${{ join(fromJSON(steps.draw.outputs.artifacts), ' ') }}
-          if-no-files-found: error
+          path: '${{ inputs.output_folder }}/*.svg'
+          if-no-files-found: ${{ inputs.fail_on_error && 'error' || 'warn' }}
 
       - name: Check job success
-        if: ${{ !inputs.fail_on_error }}
+        if: ${{ always() && !inputs.fail_on_error && steps.draw.outcome == 'failure' }}
         shell: bash
         run: |
-          if [[ "${{ steps.draw.outcome }}" == "failure" ]]; then
-            echo "The draw step failed for some keymaps, please check the logs above."
-            exit 1
-          fi
+          echo "::warning::Some keymaps could not be rendered; successful SVGs were kept as artifacts only."
