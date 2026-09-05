@@ -175,10 +175,12 @@ _build_single $target_json *west_args:
     echo "Building firmware for $artifact..."
 
     signature_file="$build_dir/.zmk-workspace-config"
-    mkdir -p "$build_dir"
+    # west pristine removes the entire target build tree, including our records.
+    provenance_record="{{ build }}/.provenance/$artifact_fs.json"
+    mkdir -p "$build_dir" "$(dirname "$provenance_record")"
     provenance_script="{{ justfile_directory() }}/scripts/firmware_provenance.py"
     python3 "$provenance_script" capture --source "{{ zmk_config_root }}" \
-        --west "{{ west_workspace }}" --record "$build_dir/build-inputs.json"
+        --west "{{ west_workspace }}" --record "$provenance_record"
     west_extra_args=({{ west_args }})
     cmake_args=(
         -DZephyr_DIR="{{ west_workspace }}/zephyr/share/zephyr-package/cmake"
@@ -223,13 +225,13 @@ _build_single $target_json *west_args:
 
     if [[ -f "$build_dir/zephyr/zmk.uf2" ]]; then
         python3 "$provenance_script" finish --source "{{ zmk_config_root }}" \
-            --west "{{ west_workspace }}" --record "$build_dir/build-inputs.json" \
+            --west "{{ west_workspace }}" --record "$provenance_record" \
             --build "$build_dir" --target "$target_json" --artifact "$build_dir/zephyr/zmk.uf2" --name "$artifact_fs.uf2"
         mkdir -p "{{ out }}" && cp "$build_dir/zephyr/zmk.uf2" "{{ out }}/$artifact_fs.uf2"
         cp "$build_dir/zephyr/zmk.uf2.json" "{{ out }}/$artifact_fs.uf2.json"
     else
         python3 "$provenance_script" finish --source "{{ zmk_config_root }}" \
-            --west "{{ west_workspace }}" --record "$build_dir/build-inputs.json" \
+            --west "{{ west_workspace }}" --record "$provenance_record" \
             --build "$build_dir" --target "$target_json" --artifact "$build_dir/zephyr/zmk.bin" --name "$artifact_fs.bin"
         mkdir -p "{{ out }}" && cp "$build_dir/zephyr/zmk.bin" "{{ out }}/$artifact_fs.bin"
         cp "$build_dir/zephyr/zmk.bin.json" "{{ out }}/$artifact_fs.bin.json"

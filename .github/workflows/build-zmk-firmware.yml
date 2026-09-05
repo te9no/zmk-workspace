@@ -345,7 +345,7 @@ jobs:
       - name: Capture firmware inputs
         run: |
           python3 .zmk-workspace-tools/scripts/firmware_provenance.py capture \
-            --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$build_dir/build-inputs.json"
+            --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$RUNNER_TEMP/build-inputs.json"
 
       - name: 🔨 West build (${{ env.display_name }})
         working-directory: ${{ env.base_dir }}
@@ -444,7 +444,7 @@ jobs:
           set -euo pipefail
           for artifact in "$build_dir"/artifacts/*; do
             python3 .zmk-workspace-tools/scripts/firmware_provenance.py finish \
-              --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$build_dir/build-inputs.json" \
+              --source "$GITHUB_WORKSPACE" --west "$base_dir" --record "$RUNNER_TEMP/build-inputs.json" \
               --build "$build_dir" --target "$TARGET_JSON" --artifact "$artifact"
           done
 

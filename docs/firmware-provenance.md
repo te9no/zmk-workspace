@@ -6,6 +6,9 @@ input fingerprints, the target, and SHA-256 hashes of the binary, generated
 `.config`, and generated `zephyr.dts`.
 
 Inputs are sampled before and after building. A changed input aborts export.
+The pre-build record is outside the target build tree: local builds use
+`<build-root>/.provenance/<artifact>.json`, and CI uses the job's `RUNNER_TEMP`.
+This keeps `west build -p always` from deleting the record before verification.
 Dirty builds are identified, not presented as reproducible clean commits.
 Metadata contains no diff contents or absolute source paths. It is provenance,
 not a cryptographic attestation or hardware-test result.

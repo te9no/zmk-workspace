@@ -36,6 +36,10 @@ class JustfileBuildTest(unittest.TestCase):
             "printf '<%s>\\n' \"$@\" > \"$WEST_LOG\"\n"
             "build_dir=''\nprevious=''\n"
             "for arg in \"$@\"; do [ \"$previous\" != -d ] || build_dir=\"$arg\"; previous=\"$arg\"; done\n"
+            "if [ \"${WEST_SIMULATE_PRISTINE:-0}\" = 1 ]; then\n"
+            "python3 -c 'import os, pathlib, shutil, sys; p=pathlib.Path(sys.argv[1]).resolve(); "
+            "assert p.parent == pathlib.Path(os.environ[\"ZMK_BUILD_ROOT\"]).resolve(); "
+            "shutil.rmtree(p)' \"$build_dir\"\nfi\n"
             "mkdir -p \"$build_dir/zephyr\"\n"
             "touch \"$build_dir/build.ninja\"\n"
             "touch \"$build_dir/zephyr/.config\" \"$build_dir/zephyr/zephyr.dts\"\n"
@@ -116,6 +120,28 @@ class JustfileBuildTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         signature = self.build / "left-board/.zmk-workspace-config"
         self.assertFalse(signature.exists())
+
+    def test_pristine_preserves_prebuild_record(self):
+        first = self.build_once()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        marker = self.build / 'left-board/old-build-marker'
+        marker.write_text('must be removed')
+        changed = json.loads(self.target)
+        changed['cmake-args'] = '-DRESET=n'
+        changed['cmake-argv'] = ['-DRESET=n']
+        result = self.build_once({'WEST_SIMULATE_PRISTINE': '1'},
+                                 json.dumps(changed, separators=(',', ':')))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('<always>', self.west_log.read_text())
+        self.assertFalse(marker.exists())
+        self.assertTrue((self.build / '.provenance/left-board.json').is_file())
+        metadata = json.loads((self.build / 'left-board/zephyr/zmk.uf2.json').read_text())
+        self.assertEqual(metadata['target']['cmake-argv'], ['-DRESET=n'])
+
+    def test_ci_record_is_outside_pristine_directory(self):
+        workflow = (SOURCE / '.github/workflows/build-zmk-firmware.yml').read_text()
+        self.assertNotIn('--record "$build_dir/build-inputs.json"', workflow)
+        self.assertEqual(workflow.count('--record "$RUNNER_TEMP/build-inputs.json"'), 2)
 
 
 if __name__ == "__main__":
